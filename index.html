@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>PPFD Meter Pro v2.6</title>
+<title>PPFD Meter Pro v3.0</title>
 <style>
   
   :root {
@@ -81,7 +81,7 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v2.6</span>
+  <span class="app-title">PPFD Meter Pro v3.0</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
@@ -140,6 +140,16 @@
     </div>
   </div>
 
+  <!-- v3.0: Kamera-Wahl. Der Messaufbau sieht die FRONTKAMERA mit
+       80 g/m²-Papier als Kosinus-Diffusor vor – bis v2.9 forderte der Code
+       aber fest die Rückkamera an (facingMode:'environment'), wodurch bei
+       bestimmungsgemäßer Haltung immer die lichtabgewandte Kamera las. -->
+  <button id="cameraToggle" onclick="toggleCamera()" style="width:100%;padding:10px;margin-bottom:10px;
+    background:transparent;border:1px solid var(--muted);border-radius:10px;color:var(--fg);
+    font-family:var(--mono);font-size:12px;letter-spacing:.06em;cursor:pointer">
+    📷 Front (Diffusor)
+  </button>
+
   <button class="measure-btn" id="startBtn" onclick="startCamera()">Kamera aktivieren</button>
   <button class="stop-btn" id="stopBtn" onclick="stopCamera()">Messung stoppen</button>
 
@@ -176,7 +186,7 @@
   <button class="calib-btn" onclick="openCalibModal()">🔧 Kalibrierung</button>
 
   <div class="calib-note">
-    v2.6 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
+    v3.0 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
   </div>
@@ -426,6 +436,10 @@ let blackFrameCount=0,blackFrameStage=0;
 // v2.6: Persistierten Kalibrier-Faktor laden (loadCalibFactor ist gehoisted,
 // CALIB_KEY muss wegen TDZ vor dem Aufruf deklariert sein)
 const CALIB_KEY='ppfd_calibFactor';
+// v3.0: Kamera-Wahl, persistiert. Standard = Frontkamera ('user'), da der
+// Messaufbau (Papier-Diffusor auf der Frontlinse) dafür ausgelegt ist.
+// Muss VOR customCalibFactor=loadCalibFactor() deklariert sein (TDZ).
+let cameraFacing=(()=>{try{return localStorage.getItem('ppfd_camera')||'user';}catch(e){return 'user';}})();
 customCalibFactor=loadCalibFactor();
 
 // v2.5: Inter-Frame-Timing
@@ -475,6 +489,43 @@ function getDynamicCalibrationConstant(iso,exposureTime){
 // Größenordnungen falsch) und 1/250 als Constraint angefordert (= 0,4 µs).
 const EXP_UNIT=1e-4; // 100 µs in Sekunden
 
+// v2.9: Schneller Y-Mean-Sample eines einzelnen Frames (für Belichtungssuche,
+// bevor die Hauptschleife läuft). Grobes Subsampling reicht hier.
+function sampleFrameY(){
+  ctx.drawImage(video,0,0,320,240);
+  const d=ctx.getImageData(0,0,320,240).data;
+  let s=0,n=0;
+  for(let i=0;i<d.length;i+=32){s+=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];n++;}
+  return s/n;
+}
+
+// v2.9: ADAPTIVE BELICHTUNGSSUCHE. Hintergrund: getSettings() echoet nur den
+// angeforderten Zahlenwert zurück – ob der Treiber ihn als 100-µs-Einheiten
+// (W3C), µs oder sonstwas interpretiert, ist von außen unsichtbar. Beobachtet:
+// Y-Mean~7 trotz heller Szene, d.h. die physische Belichtung war mutmaßlich
+// viel kürzer als angefordert. Statt der Einheiten-Annahme zu vertrauen,
+// prüfen wir das ERGEBNIS (Y-Mean) und stufen die Belichtung nach, bis das
+// Bild im Zielband liegt. Damit ist die Treiber-Einheit egal; die Absolut-
+// skala übernimmt die Nutzer-Kalibrierung gegen ein Referenz-PAR-Meter.
+async function tuneExposure(track,cap,startReq){
+  let req=startReq;const trail=[req];let y=0;
+  const capMin=cap.exposureTime?.min??startReq,capMax=cap.exposureTime?.max??startReq;
+  for(let iter=0;iter<6;iter++){
+    await new Promise(r=>setTimeout(r,350)); // Sensor/ISP Zeit zum Nachregeln geben
+    y=sampleFrameY();
+    if(y<25&&req<capMax){
+      req=Math.min(req*4,capMax);
+      try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}
+      trail.push(req);
+    }else if(y>220&&req>capMin){
+      req=Math.max(req/4,capMin);
+      try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}
+      trail.push(req);
+    }else break;
+  }
+  return {req,trail,finalY:y};
+}
+
 async function applyHardwareConstraints(stream){
   const track=stream.getVideoTracks()[0];
   const cap=track.getCapabilities(),set=track.getSettings();
@@ -517,6 +568,12 @@ async function applyHardwareConstraints(stream){
           if(constraints.colorTemperature) phase3.colorTemperature=constraints.colorTemperature;
           await track.applyConstraints({advanced:[phase3]});
         }
+        // v2.9: Ergebnis-basierte Nachjustierung – korrigiert Treiber-seitige
+        // Einheiten-Abweichungen, die getSettings() nicht sichtbar macht.
+        const tuned=await tuneExposure(track,cap,constraints.exposureTime);
+        constraints.exposureTime=tuned.req;
+        result.exposureTuneTrail=tuned.trail.join('→');
+        result.exposureTuneY=tuned.finalY;
       }else{
         await track.applyConstraints({advanced:[constraints]});
       }
@@ -526,8 +583,8 @@ async function applyHardwareConstraints(stream){
       // Nanosekunden, W3C verlangt 100-µs-Einheiten. Manche Chrome-Builds
       // reichen den rohen Treiberwert unkonvertiert durch.
       const debugStr=`min=${cap.exposureTime?.min ?? '?'} max=${cap.exposureTime?.max ?? '?'} `+
-        `vor=${set.exposureTime ?? '?'} angef.=${constraints.exposureTime ?? '?'} nach=${ns.exposureTime ?? '?'} `+
-        `→${ns.exposureTime?(ns.exposureTime*EXP_UNIT).toFixed(6):'?'}s`;
+        `tune=${result.exposureTuneTrail ?? '–'} Y=${result.exposureTuneY?.toFixed(1) ?? '?'} `+
+        `nach=${ns.exposureTime ?? '?'} →${ns.exposureTime?(ns.exposureTime*EXP_UNIT).toFixed(6):'?'}s`;
       const dbgRow=document.getElementById('debugExpRow'),dbgVal=document.getElementById('debugExpVal');
       dbgRow.style.display='flex';dbgVal.textContent=debugStr;
       console.log('[PPFD DEBUG]',debugStr);
@@ -563,7 +620,9 @@ async function applyHardwareConstraints(stream){
 // gegen das Referenz-PAR-Meter war nach jedem Stop verloren.)
 function loadCalibFactor(){
   try{
-    const v=parseFloat(localStorage.getItem(CALIB_KEY));
+    // v3.0: kameraspezifischer Schlüssel – Front (Diffusor) und Rückkamera
+    // haben komplett unterschiedliche Optik/Transmission.
+    const v=parseFloat(localStorage.getItem(CALIB_KEY+'_'+cameraFacing));
     return Number.isFinite(v)&&v>0?v:null;
   }catch(e){return null;} // z.B. localStorage blockiert
 }
@@ -572,7 +631,10 @@ function updateCalibDisplay(){
     customCalibFactor!==null?'×'+customCalibFactor.toFixed(4):'– (unkalibriert)';
 }
 function openCalibModal(){
-  document.getElementById('currentRawVal').textContent=Math.round(currentRawPPFD)||'–––';
+  // v2.8: gleiche Präzisionslogik wie Hauptanzeige; bei schwachem Signal
+  // vor Kalibrierung warnen (Faktor = ref/raw wird bei raw≈0 unbrauchbar).
+  document.getElementById('currentRawVal').textContent=
+    currentRawPPFD<=0?'–––':(currentRawPPFD<10?currentRawPPFD.toFixed(1):Math.round(currentRawPPFD));
   updateCalibDisplay();
   document.getElementById('calibModal').classList.add('open');
 }
@@ -580,13 +642,17 @@ function closeCalibModal(){document.getElementById('calibModal').classList.remov
 function applyCalibration(){
   const refPPFD=parseFloat(document.getElementById('refPPFD').value);
   if(!refPPFD||currentRawPPFD<=0){showError('Gültigen Referenzwert eingeben und Messung laufen lassen.');return;}
+  // v2.8: Kalibrierung bei schwachem Signal blockieren – ref/raw mit raw<5
+  // erzeugt einen Faktor, der fast nur Rauschen skaliert. Unter hellem,
+  // stabilem Licht kalibrieren (Rohwert deutlich über 5).
+  if(currentRawPPFD<5){showError('Rohwert zu niedrig zum Kalibrieren ('+currentRawPPFD.toFixed(1)+'). Unter hellem Licht kalibrieren.');return;}
   customCalibFactor=Math.max(0.1,Math.min(10,refPPFD/currentRawPPFD));
-  try{localStorage.setItem(CALIB_KEY,customCalibFactor);}catch(e){}
+  try{localStorage.setItem(CALIB_KEY+'_'+cameraFacing,customCalibFactor);}catch(e){}
   closeCalibModal();
 }
 function resetCalibration(){
   customCalibFactor=null;
-  try{localStorage.removeItem(CALIB_KEY);}catch(e){}
+  try{localStorage.removeItem(CALIB_KEY+'_'+cameraFacing);}catch(e){}
   updateCalibDisplay();
 }
 
@@ -627,10 +693,24 @@ function updatePixelStep(currentStep,kalmanInnovation){
 // ═══════════════════════════════════════════════════════════
 // KAMERA START / STOP
 // ═══════════════════════════════════════════════════════════
+// v3.0: Umschalter Front/Rück (Präferenz oben bei den Globals deklariert)
+function updateCameraToggleLabel(){
+  document.getElementById('cameraToggle').textContent=
+    cameraFacing==='user'?'📷 Front (Diffusor)':'📷 Rückkamera';
+}
+async function toggleCamera(){
+  cameraFacing=cameraFacing==='user'?'environment':'user';
+  try{localStorage.setItem('ppfd_camera',cameraFacing);}catch(e){}
+  updateCameraToggleLabel();
+  // Kalibrierung ist kameraspezifisch (Diffusor + andere Optik) -> neu laden
+  customCalibFactor=loadCalibFactor();
+  if(isMeasuring){stopCamera();await startCamera();} // nahtloser Wechsel
+}
+
 async function startCamera(){
   try{
     activeStream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:'environment',width:{ideal:320},height:{ideal:240}}
+      video:{facingMode:{ideal:cameraFacing},width:{ideal:320},height:{ideal:240}}
     });
     video.srcObject=activeStream;
     // FIX (MDN-Referenzmuster): explizit abspielen und auf erste dekodierte
@@ -895,6 +975,14 @@ function processLoop(timestamp){
       fv.textContent='CPU-Limit';fv.style.color='var(--muted)';
       fe.style.display='none';
       lastFlickerResult.isFlickering=false;
+    }else if(yMean_lin<2){
+      // v2.8 FIX: Mindest-Signal-Gate. Bei sehr dunklen Szenen dominieren
+      // Rauschanteile die Zeilenmittelwerte, und (max-min)/(max+min) geht
+      // gegen 100% – beobachtet als "FLICKER: 100.0% (~32 Hz)" bei Y-Mean 7
+      // (Rauschen, kein PWM; echte LED-PWM liegt zudem meist ≥100 Hz).
+      fv.textContent='Zu dunkel';fv.style.color='var(--muted)';
+      fe.style.display='none';
+      lastFlickerResult.isFlickering=false;
     }else if(pixelStep!==4){
       // v2.6 FIX: Bei Step 8× wird gar nicht gemessen (rowAverages flat) –
       // v2.5 zeigte trotzdem "Stabil". Jetzt ehrlich als pausiert markiert.
@@ -933,7 +1021,11 @@ function processLoop(timestamp){
   const state=appFSM.update(tempStatus.isWarmedUp,lastFlickerResult.isFlickering,isClipping,smoothedFps); // v2.6: echte Rate
 
   // 12. UI-RENDERING via FSM-State
-  document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp?Math.round(displayPPFD):'–––';
+  // v2.8: Unter 10 µmol eine Nachkommastelle zeigen – 0.5 µmol (dunkler Raum)
+  // erschien vorher als stumme "0" und sah wie ein Defekt aus, war aber Physik.
+  document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp
+    ?(displayPPFD<10?displayPPFD.toFixed(1):Math.round(displayPPFD))
+    :'–––';
   document.getElementById('luxVal').textContent=Math.round(lux);
   document.getElementById('yMeanVal').textContent=yMean_gamma.toFixed(1);
 
@@ -984,6 +1076,7 @@ window.addEventListener('beforeunload',()=>{if(isMeasuring) stopCamera();});
 document.getElementById('deviceInfo').textContent='Gerät: '+
   (navigator.userAgent.includes('iPhone')?'iPhone (Software-Gain erwartet)':
    navigator.userAgent.includes('Android')?'Android (Hardware-Lock möglich)':'Unbekannt');
+updateCameraToggleLabel(); // v3.0: gespeicherte Kamera-Wahl anzeigen
 </script>
 </body>
 </html>
