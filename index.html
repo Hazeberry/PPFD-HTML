@@ -123,6 +123,13 @@
       <span class="param-name">Hardware-Modus</span>
       <span class="param-val" id="hardwareVal">Auto</span>
     </div>
+    <!-- TEMPORÄR (v2.7-debug): Rohwerte der Belichtungszeit sichtbar machen,
+         da auf reinem Mobile-Setup keine DevTools-Konsole verfügbar ist.
+         Nach Diagnose der Einheiten-Frage wieder entfernbar. -->
+    <div class="param-row" id="debugExpRow" style="display:none;font-size:10px;opacity:.75">
+      <span class="param-name">Debug: Exposure raw</span>
+      <span class="param-val" id="debugExpVal" style="font-family:var(--mono)">–</span>
+    </div>
     <div class="param-row" id="clippingRow" style="display:none">
       <span class="param-name">Clipping</span>
       <span class="param-val" id="clippingVal" style="color:var(--green)">OK</span>
@@ -413,6 +420,9 @@ const appFSM         = new AppStatusStateMachine();
 let isMeasuring=false,currentFactor=0.0185,currentLightSourceName='SUNLIGHT';
 let lastAiUpdate=0,hardwareSettings=null,useSoftwareGain=false;
 let customCalibFactor=null,activeStream=null,currentRawPPFD=0,frameCount=0,animationFrameId=null;
+// Schwarzbild-Watchdog: Stage 0 = beobachten, 1 = Manuell-Modus wurde
+// verworfen (Auto-Fallback aktiv), 2 = endgültiger Sensorfehler gemeldet.
+let blackFrameCount=0,blackFrameStage=0;
 // v2.6: Persistierten Kalibrier-Faktor laden (loadCalibFactor ist gehoisted,
 // CALIB_KEY muss wegen TDZ vor dem Aufruf deklariert sein)
 const CALIB_KEY='ppfd_calibFactor';
@@ -492,10 +502,52 @@ async function applyHardwareConstraints(stream){
   }
   if(Object.keys(constraints).length>0){
     try{
-      await track.applyConstraints({advanced:[constraints]});
+      // FIX (webrtcHacks-Referenz): exposureMode und exposureTime MÜSSEN in
+      // getrennten applyConstraints-Aufrufen gesetzt werden. Der Wechsel in
+      // den manuellen Modus muss erst abgeschlossen sein, sonst ignoriert
+      // der Browser das exposureTime – der Sensor hängt dann im Manuell-
+      // Modus mit undefinierter Belichtung (plausibel: Schwarzbild).
+      if(constraints.exposureMode==='manual'){
+        await track.applyConstraints({advanced:[{exposureMode:'manual'}]});
+        const phase2={exposureTime:constraints.exposureTime};
+        if(constraints.iso!==undefined) phase2.iso=constraints.iso;
+        await track.applyConstraints({advanced:[phase2]});
+        if(constraints.whiteBalanceMode==='manual'){
+          const phase3={whiteBalanceMode:'manual'};
+          if(constraints.colorTemperature) phase3.colorTemperature=constraints.colorTemperature;
+          await track.applyConstraints({advanced:[phase3]});
+        }
+      }else{
+        await track.applyConstraints({advanced:[constraints]});
+      }
       const ns=track.getSettings();
+      // DIAGNOSE (temporär): Rohwerte sichtbar machen, um Einheiten-Annahme
+      // zu verifizieren – Android/Camera2 liefert exposureTime nativ in
+      // Nanosekunden, W3C verlangt 100-µs-Einheiten. Manche Chrome-Builds
+      // reichen den rohen Treiberwert unkonvertiert durch.
+      const debugStr=`min=${cap.exposureTime?.min ?? '?'} max=${cap.exposureTime?.max ?? '?'} `+
+        `vor=${set.exposureTime ?? '?'} angef.=${constraints.exposureTime ?? '?'} nach=${ns.exposureTime ?? '?'} `+
+        `→${ns.exposureTime?(ns.exposureTime*EXP_UNIT).toFixed(6):'?'}s`;
+      const dbgRow=document.getElementById('debugExpRow'),dbgVal=document.getElementById('debugExpVal');
+      dbgRow.style.display='flex';dbgVal.textContent=debugStr;
+      console.log('[PPFD DEBUG]',debugStr);
       result.iso=ns.iso||result.iso;
-      result.exposureTime=ns.exposureTime?ns.exposureTime*EXP_UNIT:result.exposureTime; // -> Sekunden
+      const rawExpSec=ns.exposureTime?ns.exposureTime*EXP_UNIT:result.exposureTime;
+      // GUARD: Ein Foto-Sensor belichtet realistisch zwischen ~1µs und ~2s.
+      // Liegt der umgerechnete Wert weit außerhalb, ist die Einheiten-Annahme
+      // (100-µs-Schritte) für dieses Gerät vermutlich falsch (z.B. Rohwert
+      // tatsächlich in Nanosekunden) -> Constraint verwerfen statt mit einer
+      // Größenordnungen falschen Zahl weiterzurechnen (führt sonst zu PPFD≈0
+      // unabhängig von der realen Helligkeit).
+      if(rawExpSec>2||rawExpSec<1e-6){
+        console.warn('[PPFD] Unplausible exposureTime nach Konvertierung:',rawExpSec,
+          's – vermutlich Einheiten-Mismatch (Nanosekunden statt 100-µs) auf diesem Gerät. '+
+          'Falle zurück auf Software-Gain-Modus.');
+        result.exposureTime=1/250; // Fallback: Default-Wert, nicht der kaputte Messwert
+        result.fallbackMode='exposure-unit-mismatch';
+        return result; // constraintsApplied bleibt false -> Software-Gain-Pfad greift
+      }
+      result.exposureTime=rawExpSec;
       result.frameRate=ns.frameRate||result.frameRate;  // v2.5
       result.constraintsApplied=true;
     }catch(e){console.warn('HW-Constraints fehlgeschlagen:',e);result.fallbackMode='software-lock';}
@@ -581,6 +633,18 @@ async function startCamera(){
       video:{facingMode:'environment',width:{ideal:320},height:{ideal:240}}
     });
     video.srcObject=activeStream;
+    // FIX (MDN-Referenzmuster): explizit abspielen und auf erste dekodierte
+    // Frames warten. Ohne das kann drawImage() dauerhaft Schwarz liefern
+    // (readyState<HAVE_CURRENT_DATA zeichnet nichts). Die Wartezeit erfüllt
+    // nebenbei crbug.com/711524: getCapabilities() liefert erst nach
+    // Stream-Start verlässliche Werte.
+    try{await video.play();}catch(e){console.warn('video.play():',e);}
+    await new Promise(res=>{
+      if(video.readyState>=2) return res();
+      const t=setTimeout(res,3000); // Timeout-Fallback: nicht ewig blockieren
+      video.addEventListener('loadeddata',()=>{clearTimeout(t);res();},{once:true});
+    });
+    blackFrameStage=0;blackFrameCount=0;
     hardwareSettings=await applyHardwareConstraints(activeStream);
     const mode=hardwareSettings.constraintsApplied?'Manuell':(hardwareSettings.fallbackMode?'Software':'Auto');
     document.getElementById('deviceInfo').textContent=
@@ -619,6 +683,7 @@ async function startCamera(){
 
 function stopCamera(){
   isMeasuring=false;
+  blackFrameCount=0;blackFrameStage=0; // Watchdog-Reset für nächsten Start
   if(animationFrameId){cancelAnimationFrame(animationFrameId);animationFrameId=null;}
   if(activeStream){activeStream.getTracks().forEach(t=>t.stop());activeStream=null;}
   if(video.srcObject) video.srcObject=null;
@@ -629,7 +694,7 @@ function stopCamera(){
   document.getElementById('statusDot').className='status-dot';
   document.getElementById('warmupOverlay').classList.remove('active');
   document.getElementById('gainControl').classList.remove('visible');
-  ['hardwareRow','clippingRow','reliabilityRow','fpsRow','stepRow'].forEach(id=>
+  ['hardwareRow','clippingRow','reliabilityRow','fpsRow','stepRow','debugExpRow'].forEach(id=>
     document.getElementById(id).style.display='none');
   document.getElementById('flickerWarning').style.display='none';
   document.getElementById('ppfdVal').textContent='–––';
@@ -657,9 +722,35 @@ document.getElementById('gainSlider').addEventListener('input',e=>{
 // ═══════════════════════════════════════════════════════════
 // HAUPTSCHLEIFE – v2.5 VOLLSTÄNDIG
 // ═══════════════════════════════════════════════════════════
+// Schwarzbild-Selbstheilung: Manuell-Constraints verwerfen und auf
+// kontinuierliche Automatik zurückschalten. Deckt ALLE Ursachen ab, bei
+// denen der Manuell-Modus (aus welchem Treiber-Grund auch immer) ein
+// unbrauchbares Bild liefert – robuster als jede Einzelfall-Diagnose.
+async function revertToAutoExposure(){
+  try{
+    const track=activeStream?.getVideoTracks()[0];
+    if(track) await track.applyConstraints({advanced:[{exposureMode:'continuous',whiteBalanceMode:'continuous'}]});
+  }catch(e){console.warn('Auto-Revert fehlgeschlagen:',e);}
+  if(hardwareSettings){
+    hardwareSettings.constraintsApplied=false;
+    hardwareSettings.fallbackMode='black-frame-revert';
+  }
+  useSoftwareGain=true;
+  document.getElementById('gainControl').classList.add('visible');
+  document.getElementById('hardwareVal').textContent='Auto (Fallback)';
+  kalman.r=8.0; // Software-Modus = mehr Messrauschen; Kalman-x konvergiert von 0 selbst
+  tempCompensator.reset(); // Warmup neu, da Belichtung sich gerade komplett ändert
+}
+
 function processLoop(timestamp){
   if(!isMeasuring) return;
   if(!activeStream||!video.srcObject){stopCamera();return;}
+  // FIX: Ohne dekodierte Frames (readyState<2) zeichnet drawImage nichts und
+  // alle Pixel wären 0 -> statt Nullen zu verrechnen, Frame überspringen.
+  if(video.readyState<2){
+    animationFrameId=requestAnimationFrame(processLoop);
+    return;
+  }
   frameCount++;
 
   // 1. INTER-FRAME TIMING (v2.6 FIX: Clamp statt Skip)
@@ -731,6 +822,26 @@ function processLoop(timestamp){
   const yMean_lin=sumY_lin/sampledPixels;
   const avgR_gamma=sumR_gamma/sampledPixels,avgG_gamma=sumG_gamma/sampledPixels,avgB_gamma=sumB_gamma/sampledPixels;
   const yMean_gamma=sumY_gamma/sampledPixels;
+
+  // SCHWARZBILD-WATCHDOG: yMean exakt 0 über ~19k Samples heißt "keine echten
+  // Bilddaten" – reale Sensoren rauschen selbst im Dunkeln (Werte 1–5).
+  // Stage 0: Nach ~3s Schwarzbild im Manuell-Modus -> Auto-Fallback (Selbst-
+  // heilung). Stage 1: Bleibt es auch mit Automatik schwarz -> echter Fehler.
+  if(yMean_gamma===0){
+    blackFrameCount++;
+    if(blackFrameCount>=90){
+      if(blackFrameStage===0&&hardwareSettings?.constraintsApplied){
+        blackFrameStage=1;blackFrameCount=0;
+        revertToAutoExposure();
+        showError('Sensor lieferte Schwarzbild im Manuell-Modus – automatisch auf Auto-Belichtung umgeschaltet.');
+      }else if(blackFrameStage<2){
+        blackFrameStage=2;
+        showError('Keine Bilddaten vom Sensor (dauerhaft Schwarzbild). Kamera neu starten oder anderes Gerät testen.');
+      }
+    }
+  }else{
+    blackFrameCount=0;
+  }
 
   const rowAverages=new Float64Array(240);
   if(pixelStep===4){
