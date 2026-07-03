@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PPFD Meter Pro v2.6</title>
+<style>
+  
+  :root {
+    --bg:#0d1f10;--surface:#152118;--border:#2a3d2c;
+    --green:#4ade80;--amber:#fbbf24;--red:#f87171;
+    --text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;
+    --blue:#60a5fa;--purple:#c084fc;
+    /* v2.6: Systemfonts statt Google-CDN (offline-fähig, keine IP-Übertragung an Google / DSGVO) */
+    --mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px;-webkit-tap-highlight-color:transparent}
+  header{width:100%;max-width:420px;display:flex;justify-content:space-between;align-items:center;padding:12px 0 20px;border-bottom:1px solid var(--border)}
+  .app-title{font-family:var(--mono);font-size:13px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}
+  .status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .4s}
+  .status-dot.active{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .status-dot.flicker{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+  .status-dot.error{background:var(--red);box-shadow:0 0 8px var(--red)}
+  .status-dot.warmup{background:var(--purple);box-shadow:0 0 8px var(--purple)}
+  .status-dot.low_perf{background:var(--muted);box-shadow:none}
+  main{width:100%;max-width:420px;flex:1;display:flex;flex-direction:column;gap:14px;padding-top:20px}
+  .ppfd-card{background:var(--card-bg);border:1px solid var(--border);border-radius:16px;padding:28px 24px 22px;text-align:center;position:relative;overflow:hidden}
+  .ppfd-card::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,var(--glow-color,#4ade8022) 0%,transparent 70%);pointer-events:none;transition:background .6s}
+  .ppfd-label{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-bottom:8px}
+  .ppfd-value{font-family:var(--mono);font-size:72px;font-weight:700;line-height:1;transition:color .5s;color:var(--green)}
+  .ppfd-unit{font-size:13px;color:var(--muted);margin-top:4px;font-family:var(--mono);letter-spacing:.05em}
+  .zone-badge{display:inline-block;margin-top:14px;padding:4px 14px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;border:1px solid currentColor;transition:all .4s}
+  .section-label{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+  .params-card{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:16px}
+  .param-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
+  .param-row:last-child{border-bottom:none}
+  .param-name{font-size:12px;color:var(--muted)}
+  .param-val{font-family:var(--mono);font-size:12px;color:var(--text)}
+  .measure-btn{background:none;border:1px solid var(--green);color:var(--green);border-radius:12px;padding:18px;font-family:var(--mono);font-size:13px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;width:100%;transition:all .2s}
+  .measure-btn:hover{background:#1e3d2233}
+  .measure-btn:disabled{border-color:var(--muted);color:var(--muted);cursor:not-allowed}
+  .stop-btn{background:none;border:1px solid var(--red);color:var(--red);border-radius:12px;padding:18px;font-family:var(--mono);font-size:13px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;width:100%;transition:all .2s;display:none}
+  .stop-btn:hover{background:#3d1e1e33}
+  .stop-btn.visible{display:block}
+  .info-bar{display:flex;gap:8px}
+  .info-chip{flex:1;background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center}
+  .info-chip .chip-val{font-family:var(--mono);font-size:14px;color:var(--text)}
+  .info-chip .chip-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-top:2px}
+  .flicker-warning{font-size:11px;color:var(--amber);text-align:center;margin-top:8px;font-family:var(--mono);display:none}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;justify-content:center;align-items:center;z-index:100;backdrop-filter:blur(4px)}
+  .modal-overlay.open{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;width:90%;max-width:380px}
+  .modal h3{font-family:var(--mono);font-size:14px;color:var(--green);margin-bottom:16px;text-transform:uppercase;letter-spacing:.1em}
+  .calib-input-group{margin-bottom:16px}
+  .calib-input-group label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.08em}
+  .calib-input-group input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;color:var(--text);font-family:var(--mono);font-size:16px}
+  .calib-input-group input:focus{outline:none;border-color:var(--green)}
+  .modal-actions{display:flex;gap:10px;margin-top:20px}
+  .modal-btn{flex:1;padding:12px;border-radius:10px;font-size:12px;font-family:var(--mono);cursor:pointer;border:none;text-transform:uppercase;letter-spacing:.08em}
+  .modal-btn.primary{background:var(--green);color:var(--bg);font-weight:600}
+  .modal-btn.secondary{background:transparent;color:var(--muted);border:1px solid var(--border)}
+  .gain-control{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:16px;display:none}
+  .gain-control.visible{display:block}
+  .gain-slider{width:100%;-webkit-appearance:none;appearance:none;height:4px;background:var(--border);border-radius:2px;outline:none;margin:12px 0}
+  .gain-slider::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;background:var(--green);border-radius:50%;cursor:pointer}
+  .gain-labels{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);font-family:var(--mono)}
+  .gain-value{text-align:center;font-family:var(--mono);font-size:14px;color:var(--green);margin-top:4px}
+  .fallback-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:9px;text-transform:uppercase;letter-spacing:.1em;background:var(--amber);color:var(--bg);font-weight:600}
+  .calib-note{font-size:10px;color:var(--muted);text-align:center;line-height:1.6;padding-top:20px}
+  .calib-btn{background:none;border:1px solid var(--blue);color:var(--blue);border-radius:8px;padding:10px;font-family:var(--mono);font-size:11px;cursor:pointer;width:100%;margin-top:8px;text-transform:uppercase;letter-spacing:.08em}
+  .warmup-overlay{position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(13,31,16,.92);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:10;border-radius:16px;opacity:0;pointer-events:none;transition:opacity .3s}
+  .warmup-overlay.active{opacity:1;pointer-events:all}
+  .warmup-bar{width:200px;height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:12px}
+  .warmup-fill{height:100%;background:var(--purple);width:0%;transition:width .3s}
+  .error-toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--red);color:var(--bg);padding:12px 24px;border-radius:8px;font-family:var(--mono);font-size:11px;z-index:200;transition:transform .3s;max-width:90%;text-align:center}
+  .error-toast.show{transform:translateX(-50%) translateY(0)}
+  #videoFeed,#processCanvas{display:none}
+</style>
+</head>
+<body>
+<header>
+  <span class="app-title">PPFD Meter Pro v2.6</span>
+  <div class="status-dot" id="statusDot"></div>
+</header>
+<main>
+  <div class="ppfd-card" id="ppfdCard">
+    <div class="warmup-overlay" id="warmupOverlay">
+      <span style="font-family:var(--mono);font-size:12px;color:var(--purple)">SENSOR WÄRMT AUF...</span>
+      <div class="warmup-bar"><div class="warmup-fill" id="warmupFill"></div></div>
+      <span style="font-size:10px;color:var(--muted);margin-top:8px" id="warmupText">0%</span>
+    </div>
+    <div class="ppfd-label">Photosynthetisch aktive Photonenflussdichte</div>
+    <div class="ppfd-value" id="ppfdVal">–––</div>
+    <div class="ppfd-unit">µmol · m⁻² · s⁻¹</div>
+    <div class="zone-badge" id="zoneBadge" style="color:var(--muted);border-color:var(--muted)">Kamera starten</div>
+  </div>
+
+  <div class="params-card">
+    <div class="section-label" style="margin-bottom:0">Erkannte Parameter (AI)</div>
+    <div class="param-row">
+      <span class="param-name">Lichtquelle</span>
+      <span class="param-val" id="lightSourceVal">Unbekannt</span>
+    </div>
+    <div class="param-row">
+      <span class="param-name">Spektral-Faktor</span>
+      <span class="param-val" id="spectralFactorVal">×1.00</span>
+    </div>
+    <div class="param-row">
+      <span class="param-name">Flicker-Status</span>
+      <span class="param-val" id="flickerVal">OK</span>
+    </div>
+    <div class="param-row" id="fpsRow" style="display:none">
+      <span class="param-name">Effektive FPS</span>
+      <span class="param-val" id="fpsVal">–</span>
+    </div>
+    <div class="param-row" id="stepRow" style="display:none">
+      <span class="param-name">Pixel-Step</span>
+      <span class="param-val" id="stepVal">4×</span>
+    </div>
+    <div class="param-row" id="hardwareRow" style="display:none">
+      <span class="param-name">Hardware-Modus</span>
+      <span class="param-val" id="hardwareVal">Auto</span>
+    </div>
+    <div class="param-row" id="clippingRow" style="display:none">
+      <span class="param-name">Clipping</span>
+      <span class="param-val" id="clippingVal" style="color:var(--green)">OK</span>
+    </div>
+    <div class="param-row" id="reliabilityRow" style="display:none">
+      <span class="param-name">Messzuverlässigkeit</span>
+      <span class="param-val" id="reliabilityVal">100%</span>
+    </div>
+  </div>
+
+  <button class="measure-btn" id="startBtn" onclick="startCamera()">Kamera aktivieren</button>
+  <button class="stop-btn" id="stopBtn" onclick="stopCamera()">Messung stoppen</button>
+
+  <div class="gain-control" id="gainControl">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <span class="section-label" style="margin:0">Software-Gain (Fallback)</span>
+      <span class="fallback-badge">Fallback</span>
+    </div>
+    <input type="range" class="gain-slider" id="gainSlider" min="0.1" max="5.0" step="0.05" value="1.0">
+    <div class="gain-labels"><span>0.1×</span><span>Neutral</span><span>5.0×</span></div>
+    <div class="gain-value" id="gainValue">1.00×</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4">
+      Manueller Korrekturfaktor | Y-Mean: <span id="yCurrentVal">–</span> | Trend: <span id="yTrendVal">–</span>
+    </div>
+  </div>
+
+  <div class="info-bar">
+    <div class="info-chip">
+      <div class="chip-val" id="luxVal">–</div>
+      <div class="chip-lbl">Lux (Raw)</div>
+    </div>
+    <div class="info-chip">
+      <div class="chip-val" id="yMeanVal">–</div>
+      <div class="chip-lbl">Y-Mean</div>
+    </div>
+    <div class="info-chip">
+      <div class="chip-val" id="confVal">–</div>
+      <div class="chip-lbl">AI Conf.</div>
+    </div>
+  </div>
+
+  <div class="flicker-warning" id="flickerWarning">⚠️ FLICKER ERKANNT</div>
+
+  <button class="calib-btn" onclick="openCalibModal()">🔧 Kalibrierung</button>
+
+  <div class="calib-note">
+    v2.6 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
+    Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung<br>
+    <span id="deviceInfo">Gerät: wird erkannt...</span>
+  </div>
+</main>
+
+<video id="videoFeed" autoplay playsinline muted></video>
+<canvas id="processCanvas" width="320" height="240"></canvas>
+<div class="error-toast" id="errorToast"></div>
+
+<div class="modal-overlay" id="calibModal">
+  <div class="modal">
+    <h3>🔧 PPFD-Kalibrierung</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5">
+      Referenz-PAR-Meter daneben halten und Wert eingeben um den Spektral-Faktor zu justieren.
+    </p>
+    <div class="calib-input-group">
+      <label>Referenz-PPFD (µmol·m⁻²·s⁻¹)</label>
+      <input type="number" id="refPPFD" placeholder="z.B. 450" step="1">
+    </div>
+    <div style="background:var(--bg);border-radius:8px;padding:12px;margin-bottom:16px">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Aktueller Rohwert</div>
+      <div style="font-family:var(--mono);font-size:18px;color:var(--green)" id="currentRawVal">–––</div>
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:10px 0 4px">Aktiver Kalibrier-Faktor</div>
+      <div style="font-family:var(--mono);font-size:14px;color:var(--blue)" id="activeCalibVal">–</div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn secondary" onclick="resetCalibration()">Reset</button>
+      <button class="modal-btn secondary" onclick="closeCalibModal()">Abbrechen</button>
+      <button class="modal-btn primary" onclick="applyCalibration()">Anwenden</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// GLOBALE LUT – O(1) Gamma-Dekompression
+// ═══════════════════════════════════════════════════════════
+const gammaLUT = new Float32Array(256);
+for (let i = 0; i < 256; i++) gammaLUT[i] = Math.pow(i / 255, 2.2);
+const Y_R = 0.2126, Y_G = 0.7152, Y_B = 0.0722;
+
+// ═══════════════════════════════════════════════════════════
+// 1. ADAPTIVER KALMAN FILTER – MIT EXPONIERTER INNOVATION
+// ═══════════════════════════════════════════════════════════
+class AdaptivePPFDKalmanFilter {
+  constructor(q=0.02,r=2.50,p=1.0,x=0.0){
+    this.q=q;this.r=r;this.p=p;this.x=x;
+    this.lastMeasurement=x;this.lastInnovation=0;
+  }
+  update(measurement){
+    const delta=Math.abs(measurement-this.lastMeasurement);
+    const qAdaptive=delta>500?this.q*10:this.q;
+    this.p+=qAdaptive;
+    const k=this.p/(this.p+this.r);
+    this.lastInnovation=Math.abs(measurement-this.x); // VOR dem Update
+    this.x+=k*(measurement-this.x);
+    this.p=(1-k)*this.p;
+    this.lastMeasurement=measurement;
+    return this.x;
+  }
+  get innovation(){return this.lastInnovation||0;}
+}
+
+// ═══════════════════════════════════════════════════════════
+// 2. LIGHT SOURCE AI MIT HYSTERESE
+// ═══════════════════════════════════════════════════════════
+class LightSourceDetector {
+  constructor(){
+    this.profiles={
+      'SUNLIGHT':  {r:0.33,g:0.34,factor:0.0185,name:'Sonnenlicht'},
+      'LED_GROW':  {r:0.45,g:0.25,factor:0.0155,name:'LED Grow'},
+      'SODIUM_HPS':{r:0.52,g:0.41,factor:0.0122,name:'Natriumdampf'},
+      'WHITE_FLUO':{r:0.30,g:0.38,factor:0.0140,name:'Leuchtstoff'}
+    };
+    this.lastDetection=null;this.detectionCounter=0;this.hysteresisThreshold=3;
+  }
+  detect(R,G,B){
+    const sum=R+G+B;
+    if(sum<30) return{id:'UNKNOWN',name:'Zu dunkel',factor:0.0185,conf:0};
+    const r=R/sum,g=G/sum;
+    let bestKey='SUNLIGHT',minDist=Infinity;
+    for(const[key,profile]of Object.entries(this.profiles)){
+      const dist=Math.sqrt((r-profile.r)**2+(g-profile.g)**2);
+      if(dist<minDist){minDist=dist;bestKey=key;}
+    }
+    if(this.lastDetection&&this.lastDetection.key!==bestKey){
+      this.detectionCounter++;
+      if(this.detectionCounter<this.hysteresisThreshold) bestKey=this.lastDetection.key;
+      else this.detectionCounter=0;
+    } else {this.detectionCounter=0;}
+    this.lastDetection={key:bestKey,dist:minDist};
+    return{id:bestKey,name:this.profiles[bestKey].name,factor:this.profiles[bestKey].factor,conf:Math.max(0,1-minDist*5)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 3. SPATIAL FLICKER DETECTOR – DYNAMISCHE FPS + VBLANK
+// ═══════════════════════════════════════════════════════════
+class SpatialFlickerDetector {
+  constructor(vblankFactor=0.95){this.vblankFactor=vblankFactor;}
+  detect(rowAverages,currentFps){
+    const n=rowAverages.length;
+    if(n===0) return{isFlickering:false,modulation:"0.0",freq:"N/A"};
+    const mean=rowAverages.reduce((a,b)=>a+b,0)/n;
+    if(mean===0) return{isFlickering:false,modulation:"0.0",freq:"N/A"};
+    const maxVal=Math.max(...rowAverages),minVal=Math.min(...rowAverages);
+    const modulation=((maxVal-minVal)/(maxVal+minVal))*100;
+    let zeroCrossings=0;
+    for(let i=1;i<n;i++){
+      if((rowAverages[i]-mean)*(rowAverages[i-1]-mean)<0) zeroCrossings++;
+    }
+    // v2.5: Dynamische Frequenz basierend auf nativer FPS + VBlank-Kompensation
+    const estimatedFreq=zeroCrossings>0?(zeroCrossings/2)*(currentFps/this.vblankFactor):0;
+    return{
+      isFlickering:modulation>5.0,
+      modulation:modulation.toFixed(1),
+      freq:estimatedFreq>0?'~'+Math.round(estimatedFreq)+' Hz':'N/A'
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 4. SOFTWARE GAIN CONTROLLER
+// ═══════════════════════════════════════════════════════════
+// v2.6 FIX: Auto-Adjust entfernt. Der Gain veränderte die Pixeldaten nie,
+// yMean blieb also konstant -> der Regelkreis war offen und ratschte alle 2s
+// Richtung Anschlag (0.1×/5.0×), wodurch die Anzeige über Minuten um bis zu
+// Faktor 5–10 driftete. Jetzt rein manueller Korrekturfaktor + Y-Diagnose.
+class SoftwareGainController {
+  constructor(){
+    this.gain=1.0;
+    this.history=[];this.maxHistory=30;
+  }
+  setGain(value){this.gain=parseFloat(value);}
+  calculateTrend(values){
+    const n=values.length;if(n<2) return 0;
+    let sumX=0,sumY=0,sumXY=0,sumX2=0;
+    for(let i=0;i<n;i++){sumX+=i;sumY+=values[i].value;sumXY+=i*values[i].value;sumX2+=i*i;}
+    const denom=n*sumX2-sumX*sumX;
+    return denom===0?0:(n*sumXY-sumX*sumY)/denom;
+  }
+  update(yMean,timestamp){
+    this.history.push({value:yMean,time:timestamp});
+    if(this.history.length>this.maxHistory) this.history.shift();
+    document.getElementById('yCurrentVal').textContent=yMean.toFixed(1);
+    if(this.history.length>=2){
+      const trend=this.calculateTrend(this.history.slice(-10));
+      document.getElementById('yTrendVal').textContent=(trend>0.5?'↑':trend<-0.5?'↓':'→')+' '+Math.abs(trend).toFixed(1);
+    }
+    return this.gain;
+  }
+  reset(){this.gain=1.0;this.history=[];}
+}
+
+// ═══════════════════════════════════════════════════════════
+// 5. CLIPPING DETEKTOR
+// ═══════════════════════════════════════════════════════════
+class ClippingDetector {
+  analyze(clippingPixels,totalPixels){
+    const ratio=clippingPixels/totalPixels;
+    if(ratio>0.15) return{level:'critical',message:'KRITISCH: Übersteuert!',color:'var(--red)',reliability:0.1};
+    if(ratio>0.05) return{level:'warning',message:'Warnung: Überbelichtet',color:'var(--amber)',reliability:0.5};
+    return{level:'ok',message:'OK',color:'var(--green)',reliability:1.0};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 6. TEMPERATUR-KOMPENSATION
+// ═══════════════════════════════════════════════════════════
+class TemperatureCompensator {
+  constructor(){this.warmupFrames=300;this.framesCaptured=0;}
+  update(){
+    this.framesCaptured++;
+    const progress=Math.min(100,(this.framesCaptured/this.warmupFrames)*100);
+    if(this.framesCaptured<this.warmupFrames){
+      return{factor:1.0-(0.02*(1-this.framesCaptured/this.warmupFrames)),progress,isWarmedUp:false};
+    }
+    return{factor:1.0,progress:100,isWarmedUp:true};
+  }
+  reset(){this.framesCaptured=0;}
+}
+
+// ═══════════════════════════════════════════════════════════
+// 7. FSM – HYSTERESE-BASIERTE STATE MACHINE (Schmitt-Trigger)
+// ═══════════════════════════════════════════════════════════
+class AppStatusStateMachine {
+  constructor(){
+    this.STATES={
+      WARMUP:  {id:'WARMUP',  color:'var(--purple)',label:'SENS_WARMUP'},
+      STABLE:  {id:'STABLE',  color:'var(--green)', label:'OPTIMAL'},
+      FLICKER: {id:'FLICKER', color:'var(--amber)', label:'FLICKER_WARN'},
+      CLIPPING:{id:'CLIPPING',color:'var(--red)',   label:'OVEREXPOSED'},
+      LOW_PERF:{id:'LOW_PERF',color:'var(--muted)', label:'CPU_LIMIT'}
+    };
+    this.current=this.STATES.WARMUP;
+    this.acc={flicker:0,clipping:0,perf:0};
+    this.LIMITS={
+      FLICKER_ENTER:20,FLICKER_EXIT:0,
+      CLIP_ENTER:5,   CLIP_EXIT:0,
+      PERF_ENTER:45,  PERF_EXIT:0
+    };
+  }
+  update(warmedUp,flickering,isClipping,fps){
+    if(!warmedUp){this.current=this.STATES.WARMUP;return this.current;}
+    this.acc.flicker =flickering  ?Math.min(60,this.acc.flicker+1) :Math.max(0,this.acc.flicker-1);
+    this.acc.clipping=isClipping  ?Math.min(60,this.acc.clipping+1):Math.max(0,this.acc.clipping-1);
+    this.acc.perf    =(fps<18)    ?Math.min(60,this.acc.perf+1)    :Math.max(0,this.acc.perf-1);
+    switch(this.current.id){
+      case 'WARMUP':
+        this.current=this.STATES.STABLE;break;
+      case 'STABLE':
+        if(this.acc.clipping>=this.LIMITS.CLIP_ENTER)    this.current=this.STATES.CLIPPING;
+        else if(this.acc.flicker>=this.LIMITS.FLICKER_ENTER) this.current=this.STATES.FLICKER;
+        else if(this.acc.perf>=this.LIMITS.PERF_ENTER)       this.current=this.STATES.LOW_PERF;
+        break;
+      case 'FLICKER':
+        if(this.acc.clipping>=this.LIMITS.CLIP_ENTER)    this.current=this.STATES.CLIPPING;
+        else if(this.acc.flicker<=this.LIMITS.FLICKER_EXIT)  this.current=this.STATES.STABLE;
+        break;
+      case 'CLIPPING':
+        if(this.acc.clipping<=this.LIMITS.CLIP_EXIT) this.current=this.STATES.STABLE;break;
+      case 'LOW_PERF':
+        if(this.acc.perf<=this.LIMITS.PERF_EXIT) this.current=this.STATES.STABLE;break;
+    }
+    return this.current;
+  }
+  reset(){this.current=this.STATES.WARMUP;this.acc={flicker:0,clipping:0,perf:0};}
+}
+
+// ═══════════════════════════════════════════════════════════
+// GLOBAL STATE
+// ═══════════════════════════════════════════════════════════
+const kalman         = new AdaptivePPFDKalmanFilter(0.02,2.50,1.0,0.0);
+const lightDetector  = new LightSourceDetector();
+const flickerDetector= new SpatialFlickerDetector(0.95);
+const gainController = new SoftwareGainController();
+const clippingDetector=new ClippingDetector();
+const tempCompensator= new TemperatureCompensator();
+const appFSM         = new AppStatusStateMachine();
+
+let isMeasuring=false,currentFactor=0.0185,currentLightSourceName='SUNLIGHT';
+let lastAiUpdate=0,hardwareSettings=null,useSoftwareGain=false;
+let customCalibFactor=null,activeStream=null,currentRawPPFD=0,frameCount=0,animationFrameId=null;
+// v2.6: Persistierten Kalibrier-Faktor laden (loadCalibFactor ist gehoisted,
+// CALIB_KEY muss wegen TDZ vor dem Aufruf deklariert sein)
+const CALIB_KEY='ppfd_calibFactor';
+customCalibFactor=loadCalibFactor();
+
+// v2.5: Inter-Frame-Timing
+let lastFrameTime=0,smoothedFps=30;
+
+// v2.5: Adaptives Subsampling
+let pixelStep=4,stepTransitionAccum=0;
+
+// v2.5: Flicker-Reliability-Gate (Hysterese)
+let flickerReliable=true,lowFpsFrameCount=0;
+const FPS_THRESHOLD_LOW=15,FPS_THRESHOLD_HIGH=20,FPS_CONFIRM_FRAMES=10;
+
+// Letztes Flicker-Ergebnis für FSM
+let lastFlickerResult={isFlickering:false,modulation:"0.0",freq:"N/A"};
+
+const APERTURE_SQ=4.0,ISO=100,EXPOSURE_TIME=1/250;
+const video =document.getElementById('videoFeed');
+const canvas=document.getElementById('processCanvas');
+const ctx   =canvas.getContext('2d',{willReadFrequently:true});
+
+// ═══════════════════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════════════════
+function showError(msg){
+  const t=document.getElementById('errorToast');
+  t.textContent=msg;t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),4000);
+}
+function setButtonState(state){
+  const s=document.getElementById('startBtn'),p=document.getElementById('stopBtn');
+  if(state==='measuring'){s.style.display='none';p.classList.add('visible');}
+  else{s.style.display='block';s.disabled=false;s.textContent='Kamera aktivieren';p.classList.remove('visible');}
+}
+
+// ═══════════════════════════════════════════════════════════
+// HARDWARE
+// ═══════════════════════════════════════════════════════════
+function getDynamicCalibrationConstant(iso,exposureTime){
+  let c=1284;
+  if(iso>800) c*=0.88;else if(iso>400) c*=0.95;
+  if(exposureTime>1/30) c*=0.98;
+  return c;
+}
+// v2.6 FIX: exposureTime der MediaCapture-API ist in 100-µs-Einheiten definiert
+// (W3C mediacapture-image), NICHT in Sekunden. Intern rechnen wir durchgehend in
+// Sekunden – v2.5 hat beides gemischt (Ergebnis auf Manual-Exposure-Geräten um
+// Größenordnungen falsch) und 1/250 als Constraint angefordert (= 0,4 µs).
+const EXP_UNIT=1e-4; // 100 µs in Sekunden
+
+async function applyHardwareConstraints(stream){
+  const track=stream.getVideoTracks()[0];
+  const cap=track.getCapabilities(),set=track.getSettings();
+  const result={
+    iso:set.iso||100,
+    exposureTime:set.exposureTime?set.exposureTime*EXP_UNIT:1/250, // -> Sekunden
+    frameRate:set.frameRate||30,  // v2.5: Native FPS erfassen
+    whiteBalanceMode:set.whiteBalanceMode||'continuous',
+    constraintsApplied:false,
+    deviceLabel:track.label||'Unbekannt'
+  };
+  const constraints={};
+  if(cap.exposureMode?.includes('manual')){
+    constraints.exposureMode='manual';
+    let expReq=Math.round((1/250)/EXP_UNIT); // 1/250 s = 40 (100-µs-Einheiten)
+    if(cap.exposureTime){ // In den vom Gerät unterstützten Bereich clampen
+      expReq=Math.min(Math.max(expReq,cap.exposureTime.min??expReq),cap.exposureTime.max??expReq);
+    }
+    constraints.exposureTime=expReq;
+  }
+  if(cap.iso) constraints.iso=100;
+  if(cap.whiteBalanceMode?.includes('manual')){
+    constraints.whiteBalanceMode='manual';
+    if(cap.colorTemperature) constraints.colorTemperature=5500;
+  }
+  if(Object.keys(constraints).length>0){
+    try{
+      await track.applyConstraints({advanced:[constraints]});
+      const ns=track.getSettings();
+      result.iso=ns.iso||result.iso;
+      result.exposureTime=ns.exposureTime?ns.exposureTime*EXP_UNIT:result.exposureTime; // -> Sekunden
+      result.frameRate=ns.frameRate||result.frameRate;  // v2.5
+      result.constraintsApplied=true;
+    }catch(e){console.warn('HW-Constraints fehlgeschlagen:',e);result.fallbackMode='software-lock';}
+  }else{result.fallbackMode='no-manual-control';}
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════
+// KALIBRIERUNG
+// ═══════════════════════════════════════════════════════════
+// v2.6: Kalibrierung persistiert in localStorage und überlebt Stop/Neustart.
+// (v2.5 hat customCalibFactor bei jedem stopCamera() genullt – die Messung
+// gegen das Referenz-PAR-Meter war nach jedem Stop verloren.)
+function loadCalibFactor(){
+  try{
+    const v=parseFloat(localStorage.getItem(CALIB_KEY));
+    return Number.isFinite(v)&&v>0?v:null;
+  }catch(e){return null;} // z.B. localStorage blockiert
+}
+function updateCalibDisplay(){
+  document.getElementById('activeCalibVal').textContent=
+    customCalibFactor!==null?'×'+customCalibFactor.toFixed(4):'– (unkalibriert)';
+}
+function openCalibModal(){
+  document.getElementById('currentRawVal').textContent=Math.round(currentRawPPFD)||'–––';
+  updateCalibDisplay();
+  document.getElementById('calibModal').classList.add('open');
+}
+function closeCalibModal(){document.getElementById('calibModal').classList.remove('open');}
+function applyCalibration(){
+  const refPPFD=parseFloat(document.getElementById('refPPFD').value);
+  if(!refPPFD||currentRawPPFD<=0){showError('Gültigen Referenzwert eingeben und Messung laufen lassen.');return;}
+  customCalibFactor=Math.max(0.1,Math.min(10,refPPFD/currentRawPPFD));
+  try{localStorage.setItem(CALIB_KEY,customCalibFactor);}catch(e){}
+  closeCalibModal();
+}
+function resetCalibration(){
+  customCalibFactor=null;
+  try{localStorage.removeItem(CALIB_KEY);}catch(e){}
+  updateCalibDisplay();
+}
+
+// ═══════════════════════════════════════════════════════════
+// PAR-BERECHNUNG
+// ═══════════════════════════════════════════════════════════
+function calculatePARFromLinear(r,g,b,id){
+  if(id==='LED_GROW')    return r*0.50+g*0.15+b*0.35;
+  if(id==='SODIUM_HPS')  return r*0.55+g*0.40+b*0.05;
+  return r*0.33+g*0.34+b*0.33;
+}
+
+// ═══════════════════════════════════════════════════════════
+// ADAPTIVES SUBSAMPLING – KALMAN-INNOVATION ALS GATE
+// ═══════════════════════════════════════════════════════════
+function updatePixelStep(currentStep,kalmanInnovation){
+  const LIGHT_CHANGE_THRESHOLD=0.3,STABLE_THRESHOLD=0.8;
+  const divisor=Math.abs(kalman.x)||1;
+  const normInnovation=kalmanInnovation/divisor;
+  if(currentStep===4){
+    if(normInnovation<LIGHT_CHANGE_THRESHOLD){
+      stepTransitionAccum+=normInnovation;
+    }else{
+      stepTransitionAccum=0;return 4; // Lichtwechsel -> feines Raster behalten
+    }
+    if(stepTransitionAccum>STABLE_THRESHOLD){stepTransitionAccum=0;return 8;}
+    return 4;
+  }else{
+    if(normInnovation>LIGHT_CHANGE_THRESHOLD*2){stepTransitionAccum=0;return 4;}
+    if(normInnovation<LIGHT_CHANGE_THRESHOLD/2){
+      stepTransitionAccum+=normInnovation;
+      if(stepTransitionAccum>STABLE_THRESHOLD*2){stepTransitionAccum=0;return 4;}
+    }
+    return 8;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// KAMERA START / STOP
+// ═══════════════════════════════════════════════════════════
+async function startCamera(){
+  try{
+    activeStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'environment',width:{ideal:320},height:{ideal:240}}
+    });
+    video.srcObject=activeStream;
+    hardwareSettings=await applyHardwareConstraints(activeStream);
+    const mode=hardwareSettings.constraintsApplied?'Manuell':(hardwareSettings.fallbackMode?'Software':'Auto');
+    document.getElementById('deviceInfo').textContent=
+      `Gerät: ${hardwareSettings.deviceLabel} · ${mode} · ${hardwareSettings.frameRate?.toFixed(0)||'?'} fps`;
+    document.getElementById('hardwareRow').style.display='flex';
+    document.getElementById('hardwareVal').textContent=mode;
+    document.getElementById('clippingRow').style.display='flex';
+    document.getElementById('reliabilityRow').style.display='flex';
+    document.getElementById('fpsRow').style.display='flex';
+    document.getElementById('stepRow').style.display='flex';
+    useSoftwareGain=!hardwareSettings.constraintsApplied;
+    if(useSoftwareGain){
+      document.getElementById('gainControl').classList.add('visible');
+      document.getElementById('gainSlider').value=1.0;          // v2.6: UI-Sync
+      document.getElementById('gainValue').textContent='1.00×'; //       mit reset()
+    }
+    kalman.r=hardwareSettings.constraintsApplied?2.5:8.0;
+    tempCompensator.reset();gainController.reset();appFSM.reset();
+    frameCount=0;lastFrameTime=0;smoothedFps=hardwareSettings.frameRate||30;
+    pixelStep=4;stepTransitionAccum=0;
+    lastFlickerResult={isFlickering:false,modulation:"0.0",freq:"N/A"};
+    flickerReliable=true;lowFpsFrameCount=0;
+    setButtonState('measuring');
+    document.getElementById('statusDot').classList.add('active');
+    isMeasuring=true;
+    animationFrameId=requestAnimationFrame(processLoop);
+  }catch(err){
+    isMeasuring=false;setButtonState('idle');
+    document.getElementById('statusDot').className='status-dot error'; // v2.6: sauber setzen statt stapeln
+    if(err.name==='NotAllowedError')       showError('Kamera-Zugriff verweigert.');
+    else if(err.name==='NotFoundError')    showError('Keine Kamera gefunden.');
+    else if(err.name==='NotReadableError') showError('Kamera wird bereits verwendet.');
+    else                                   showError('Kamera-Fehler: '+err.message);
+  }
+}
+
+function stopCamera(){
+  isMeasuring=false;
+  if(animationFrameId){cancelAnimationFrame(animationFrameId);animationFrameId=null;}
+  if(activeStream){activeStream.getTracks().forEach(t=>t.stop());activeStream=null;}
+  if(video.srcObject) video.srcObject=null;
+  // v2.5 State-Reset
+  lastFrameTime=0;smoothedFps=30;pixelStep=4;stepTransitionAccum=0;
+  flickerReliable=true;lowFpsFrameCount=0;
+  setButtonState('idle');
+  document.getElementById('statusDot').className='status-dot';
+  document.getElementById('warmupOverlay').classList.remove('active');
+  document.getElementById('gainControl').classList.remove('visible');
+  ['hardwareRow','clippingRow','reliabilityRow','fpsRow','stepRow'].forEach(id=>
+    document.getElementById(id).style.display='none');
+  document.getElementById('flickerWarning').style.display='none';
+  document.getElementById('ppfdVal').textContent='–––';
+  document.getElementById('luxVal').textContent='–';
+  document.getElementById('yMeanVal').textContent='–';
+  document.getElementById('confVal').textContent='–';
+  document.getElementById('fpsVal').textContent='–';
+  document.getElementById('stepVal').textContent='4×';
+  document.getElementById('currentRawVal').textContent='–––';
+  document.getElementById('zoneBadge').textContent='Kamera starten';
+  document.getElementById('zoneBadge').style.color='var(--muted)';
+  document.getElementById('zoneBadge').style.borderColor='var(--muted)';
+  document.getElementById('ppfdVal').style.color='var(--green)';
+  document.getElementById('ppfdCard').style.setProperty('--glow-color','#4ade8022');
+  // v2.6: customCalibFactor bleibt erhalten (persistente Kalibrierung)
+  hardwareSettings=null;currentRawPPFD=0;frameCount=0;
+  currentFactor=0.0185;currentLightSourceName='SUNLIGHT';lastAiUpdate=0;
+}
+
+document.getElementById('gainSlider').addEventListener('input',e=>{
+  gainController.setGain(e.target.value);
+  document.getElementById('gainValue').textContent=parseFloat(e.target.value).toFixed(2)+'×';
+});
+
+// ═══════════════════════════════════════════════════════════
+// HAUPTSCHLEIFE – v2.5 VOLLSTÄNDIG
+// ═══════════════════════════════════════════════════════════
+function processLoop(timestamp){
+  if(!isMeasuring) return;
+  if(!activeStream||!video.srcObject){stopCamera();return;}
+  frameCount++;
+
+  // 1. INTER-FRAME TIMING (v2.6 FIX: Clamp statt Skip)
+  // v2.5 hat Frames >100ms verworfen -> unter 10 fps sah die EMA nie ein
+  // Update, smoothedFps blieb beim Startwert und das Reliability-Gate griff
+  // genau dann nicht, wenn es gebraucht wurde. Clamp bei 250ms begrenzt
+  // stattdessen nur den Einfluss einzelner Ausreißer (Tab-Wechsel etc.).
+  if(lastFrameTime>0){
+    const deltaMs=Math.min(timestamp-lastFrameTime,250);
+    if(deltaMs>0){
+      const instantFps=1000/deltaMs;
+      smoothedFps=smoothedFps*0.85+instantFps*0.15; // EMA alpha=0.15
+    }
+  }
+  lastFrameTime=timestamp;
+  // v2.6 FIX: Zwei getrennte Raten. nominalFps (Sensor) für die Rolling-
+  // Shutter-Frequenzschätzung – das Sensor-Readout hängt nicht an rAF.
+  // smoothedFps (echte rAF-Rate) für Anzeige, Gate und FSM: in v2.5 bekam
+  // die FSM die nominelle Rate (immer ≥30 wegen ||30-Default), wodurch der
+  // LOW_PERF-Zustand nie erreichbar war und die FPS-Anzeige konstant blieb.
+  const nominalFps=hardwareSettings?.frameRate||smoothedFps;
+
+  // 2. FLICKER-RELIABILITY-GATE (Hysterese-Akkumulator)
+  if(smoothedFps<FPS_THRESHOLD_LOW){
+    lowFpsFrameCount=Math.min(lowFpsFrameCount+1,FPS_CONFIRM_FRAMES);
+  }else if(smoothedFps>FPS_THRESHOLD_HIGH){
+    lowFpsFrameCount=Math.max(lowFpsFrameCount-1,0);
+  }
+  flickerReliable=lowFpsFrameCount<FPS_CONFIRM_FRAMES;
+
+  // 3. FPS + STEP ANZEIGE (alle 30 Frames)
+  if(frameCount%30===0){
+    document.getElementById('fpsVal').textContent=smoothedFps.toFixed(1)+' fps'; // v2.6: echte Rate
+    document.getElementById('stepVal').textContent=pixelStep+'×';
+  }
+
+  // 4. ADAPTIVES SUBSAMPLING
+  pixelStep=updatePixelStep(pixelStep,kalman.innovation);
+
+  // 5. PIXEL-ANALYSE MIT O(1) LUT
+  ctx.drawImage(video,0,0,320,240);
+  const imageData=ctx.getImageData(0,0,320,240);
+  const data=imageData.data;
+  let sumR_lin=0,sumG_lin=0,sumB_lin=0,sumY_lin=0;
+  let sumR_gamma=0,sumG_gamma=0,sumB_gamma=0,sumY_gamma=0;
+  let clippingPixels=0,sampledPixels=0;
+  const rowSums_lin=new Float64Array(240);
+  const len=data.length;
+  const stride=4*pixelStep;
+
+  for(let i=0;i<len;i+=stride){
+    const rg=data[i],gg=data[i+1],bg=data[i+2];
+    if(rg>250||gg>250||bg>250) clippingPixels++;
+    const rl=gammaLUT[rg],gl=gammaLUT[gg],bl=gammaLUT[bg];
+    sumR_lin+=rl;sumG_lin+=gl;sumB_lin+=bl;
+    const yLin=Y_R*rl+Y_G*gl+Y_B*bl;
+    sumY_lin+=yLin;
+    sumR_gamma+=rg;sumG_gamma+=gg;sumB_gamma+=bg;
+    sumY_gamma+=0.299*rg+0.587*gg+0.114*bg;
+    // rowAverages nur bei Step=4; Step=8 zu dünn für Flicker-Detection
+    if(pixelStep===4){
+      const row=(i>>2)/320|0;
+      rowSums_lin[row]+=yLin;
+    }
+    sampledPixels++;
+  }
+
+  const avgR_lin=sumR_lin/sampledPixels,avgG_lin=sumG_lin/sampledPixels,avgB_lin=sumB_lin/sampledPixels;
+  const yMean_lin=sumY_lin/sampledPixels;
+  const avgR_gamma=sumR_gamma/sampledPixels,avgG_gamma=sumG_gamma/sampledPixels,avgB_gamma=sumB_gamma/sampledPixels;
+  const yMean_gamma=sumY_gamma/sampledPixels;
+
+  const rowAverages=new Float64Array(240);
+  if(pixelStep===4){
+    // v2.6 FIX: pro Zeile werden 320/pixelStep=80 Pixel gesampelt, nicht 320.
+    // (Für Modulation/Zero-Crossings skalierungsneutral, aber jetzt stimmt der Name.)
+    const samplesPerRow=320/pixelStep;
+    for(let i=0;i<240;i++) rowAverages[i]=rowSums_lin[i]/samplesPerRow;
+  }else{
+    rowAverages.fill(yMean_lin); // Flat -> 0% Modulation -> kein False-Positive
+  }
+
+  // 6. CLIPPING (v2.6 FIX: Ratio direkt auf gesampelte Pixel beziehen)
+  // v2.5 rechnete clippingPixels*step/4 gegen 320*240 -> Ratio um Faktor 4
+  // unterschätzt, "Kritisch" triggerte erst bei ~60% statt 15% Clipping.
+  const clipStatus=clippingDetector.analyze(clippingPixels,sampledPixels);
+  document.getElementById('clippingVal').textContent=clipStatus.message;
+  document.getElementById('clippingVal').style.color=clipStatus.color;
+  document.getElementById('reliabilityVal').textContent=(clipStatus.reliability*100).toFixed(0)+'%';
+  document.getElementById('reliabilityVal').style.color=clipStatus.color;
+
+  // 7. TEMPERATUR-KOMPENSATION
+  const tempStatus=tempCompensator.update();
+  if(!tempStatus.isWarmedUp){
+    document.getElementById('warmupOverlay').classList.add('active');
+    document.getElementById('warmupFill').style.width=tempStatus.progress+'%';
+    document.getElementById('warmupText').textContent=Math.round(tempStatus.progress)+'%';
+    document.getElementById('statusDot').className='status-dot warmup';
+  }else{
+    document.getElementById('warmupOverlay').classList.remove('active');
+  }
+
+  // 8. SOFTWARE-GAIN
+  let gainMultiplier=1.0;
+  if(useSoftwareGain){
+    gainMultiplier=gainController.update(yMean_gamma,timestamp);
+    document.getElementById('gainValue').textContent=gainMultiplier.toFixed(2)+'×';
+  }
+
+  // 9. AI-KLASSIFIKATION + FLICKER (1 Hz gedrosselt)
+  if(timestamp-lastAiUpdate>1000){
+    const lightResult=lightDetector.detect(avgR_gamma,avgG_gamma,avgB_gamma);
+    currentFactor=lightResult.factor;currentLightSourceName=lightResult.id;
+    document.getElementById('lightSourceVal').textContent=lightResult.name;
+    document.getElementById('spectralFactorVal').textContent='×'+currentFactor.toFixed(4);
+    document.getElementById('confVal').textContent=(lightResult.conf*100).toFixed(0)+'%';
+
+    const fe=document.getElementById('flickerWarning');
+    const fv=document.getElementById('flickerVal');
+    if(!flickerReliable){
+      // CPU-Limit: Flicker-Detection pausiert
+      fv.textContent='CPU-Limit';fv.style.color='var(--muted)';
+      fe.style.display='none';
+      lastFlickerResult.isFlickering=false;
+    }else if(pixelStep!==4){
+      // v2.6 FIX: Bei Step 8× wird gar nicht gemessen (rowAverages flat) –
+      // v2.5 zeigte trotzdem "Stabil". Jetzt ehrlich als pausiert markiert.
+      fv.textContent='Pausiert (8×)';fv.style.color='var(--muted)';
+      fe.style.display='none';
+      lastFlickerResult.isFlickering=false;
+    }else{
+      lastFlickerResult=flickerDetector.detect(rowAverages,nominalFps);
+      if(lastFlickerResult.isFlickering){
+        fe.style.display='block';
+        fe.textContent=`⚠️ FLICKER: ${lastFlickerResult.modulation}% Modulation (${lastFlickerResult.freq})`;
+        fv.textContent='WARNUNG';fv.style.color='var(--amber)';
+      }else{
+        fe.style.display='none';
+        fv.textContent='Stabil';fv.style.color='var(--green)';
+      }
+    }
+    lastAiUpdate=timestamp;
+  }
+
+  // 10. PHYSIKALISCHE BERECHNUNG
+  const effectiveISO=(hardwareSettings?.iso||ISO)*gainMultiplier;
+  const calibConstant=getDynamicCalibrationConstant(hardwareSettings?.iso||ISO,hardwareSettings?.exposureTime||EXPOSURE_TIME);
+  const hSensor_lux=(yMean_lin*APERTURE_SQ)/(effectiveISO*(hardwareSettings?.exposureTime||EXPOSURE_TIME));
+  const lux=hSensor_lux*calibConstant;
+  const parVal=calculatePARFromLinear(avgR_lin,avgG_lin,avgB_lin,currentLightSourceName);
+  const hSensor_par=(parVal*APERTURE_SQ)/(effectiveISO*(hardwareSettings?.exposureTime||EXPOSURE_TIME));
+  let rawPPFD=hSensor_par*calibConstant*currentFactor;
+  rawPPFD*=tempStatus.factor;
+  if(customCalibFactor!==null) rawPPFD*=customCalibFactor;
+  currentRawPPFD=rawPPFD;
+  const displayPPFD=tempStatus.isWarmedUp?kalman.update(rawPPFD):0;
+
+  // 11. FSM – ZUSTANDSMASCHINE
+  const isClipping=(clipStatus.level==='critical');
+  const state=appFSM.update(tempStatus.isWarmedUp,lastFlickerResult.isFlickering,isClipping,smoothedFps); // v2.6: echte Rate
+
+  // 12. UI-RENDERING via FSM-State
+  document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp?Math.round(displayPPFD):'–––';
+  document.getElementById('luxVal').textContent=Math.round(lux);
+  document.getElementById('yMeanVal').textContent=yMean_gamma.toFixed(1);
+
+  const badgeEl=document.getElementById('zoneBadge');
+  const ppfdEl=document.getElementById('ppfdVal');
+  const cardEl=document.getElementById('ppfdCard');
+  const dotEl=document.getElementById('statusDot');
+
+  if(state.id==='STABLE'){
+    const zone=getPPFDZone(displayPPFD);
+    badgeEl.textContent=zone.label;
+    ppfdEl.style.color=zone.color;
+    badgeEl.style.color=zone.color;
+    badgeEl.style.borderColor=zone.color;
+    cardEl.style.setProperty('--glow-color',zone.color+'33');
+    dotEl.className='status-dot active';
+  }else{
+    if(state.id==='WARMUP') ppfdEl.textContent='–––';
+    if(state.id==='LOW_PERF') badgeEl.textContent='CPU LIMIT';
+    else badgeEl.textContent=state.label;
+    ppfdEl.style.color=state.color;
+    badgeEl.style.color=state.color;
+    badgeEl.style.borderColor=state.color;
+    cardEl.style.setProperty('--glow-color',state.color+'33');
+    dotEl.className=`status-dot active ${state.id.toLowerCase()}`;
+  }
+
+  animationFrameId=requestAnimationFrame(processLoop);
+}
+
+function getPPFDZone(v){
+  if(v<50)   return{label:'Sehr niedrig',     color:'#6b8f6e'};
+  if(v<200)  return{label:'Niedrig',           color:'#60a5fa'};
+  if(v<400)  return{label:'Optimal Keimling', color:'#34d399'};
+  if(v<700)  return{label:'Optimal Wachstum', color:'#4ade80'};
+  if(v<1000) return{label:'Optimal Bluete',   color:'#fbbf24'};
+  if(v<1500) return{label:'Hoch',             color:'#f97316'};
+  return          {label:'Sehr hoch',         color:'#f87171'};
+}
+
+// ═══════════════════════════════════════════════════════════
+// EVENT LISTENERS
+// ═══════════════════════════════════════════════════════════
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden&&isMeasuring){stopCamera();showError('Messung pausiert (Tab im Hintergrund)');}
+});
+window.addEventListener('beforeunload',()=>{if(isMeasuring) stopCamera();});
+document.getElementById('deviceInfo').textContent='Gerät: '+
+  (navigator.userAgent.includes('iPhone')?'iPhone (Software-Gain erwartet)':
+   navigator.userAgent.includes('Android')?'Android (Hardware-Lock möglich)':'Unbekannt');
+</script>
+</body>
+</html>
