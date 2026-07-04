@@ -106,3 +106,11 @@ Please open an issue with:
 - **No RAW access:** the browser only receives the ISP-processed video stream, not RAW sensor data. A hard platform limit.
 - **Spectral approximation:** a phone camera is RGB-weighted, not PAR (400–700 nm equally weighted). The light-source heuristic is coarse (sometimes classifies LEDs as "sunlight").
 - **Secure context required:** `getUserMedia()` needs HTTPS or `file://` — it works via GitHub Pages (HTTPS); the camera then runs fully locally.
+
+
+
+
+## Entstehung / Development
+
+Entwickelt von [Hazeberry](https://github.com/Hazeberry), unter Mitarbeit von Claude (Anthropic) — iterativ getestet und verifiziert.
+Developed by [Hazeberry](https://github.com/Hazeberry), with assistance from Claude (Anthropic) — iteratively tested and verified.
