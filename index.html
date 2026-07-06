@@ -3,7 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>PPFD Meter Pro v3.0</title>
+<!-- v3.1: Metadaten für Teilen/Homescreen; Favicon als Daten-URI (keine externen Requests) -->
+<meta name="description" content="Kamerabasiertes PPFD-Messwerkzeug (µmol·m⁻²·s⁻¹) als einzelne HTML-Datei – offen, kostenlos, komplett lokal im Browser.">
+<meta name="theme-color" content="#0d1f10">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>">
+<title>PPFD Meter Pro v3.1</title>
 <style>
   
   :root {
@@ -25,12 +29,17 @@
   .status-dot.error{background:var(--red);box-shadow:0 0 8px var(--red)}
   .status-dot.warmup{background:var(--purple);box-shadow:0 0 8px var(--purple)}
   .status-dot.low_perf{background:var(--muted);box-shadow:none}
+  /* v3.1 FIX: FSM-Zustand CLIPPING setzt die Klasse 'clipping' – dafür gab es
+     keine Regel, der Punkt blieb bei Übersteuerung grün ('active'). */
+  .status-dot.clipping{background:var(--red);box-shadow:0 0 8px var(--red)}
   main{width:100%;max-width:420px;flex:1;display:flex;flex-direction:column;gap:14px;padding-top:20px}
   .ppfd-card{background:var(--card-bg);border:1px solid var(--border);border-radius:16px;padding:28px 24px 22px;text-align:center;position:relative;overflow:hidden}
   .ppfd-card::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,var(--glow-color,#4ade8022) 0%,transparent 70%);pointer-events:none;transition:background .6s}
   .ppfd-label{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-bottom:8px}
   .ppfd-value{font-family:var(--mono);font-size:72px;font-weight:700;line-height:1;transition:color .5s;color:var(--green)}
   .ppfd-unit{font-size:13px;color:var(--muted);margin-top:4px;font-family:var(--mono);letter-spacing:.05em}
+  .dli-row{font-size:11px;color:var(--muted);margin-top:10px;font-family:var(--mono)}
+  .dli-row b{color:var(--text);font-weight:600}
   .zone-badge{display:inline-block;margin-top:14px;padding:4px 14px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;border:1px solid currentColor;transition:all .4s}
   .section-label{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
   .params-card{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:16px}
@@ -81,7 +90,7 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v3.0</span>
+  <span class="app-title">PPFD Meter Pro v3.1</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
@@ -94,6 +103,9 @@
     <div class="ppfd-label">Photosynthetisch aktive Photonenflussdichte</div>
     <div class="ppfd-value" id="ppfdVal">–––</div>
     <div class="ppfd-unit">µmol · m⁻² · s⁻¹</div>
+    <!-- v3.1: DLI-Hochrechnung (Daily Light Integral) – die für Grower
+         eigentlich relevante Tagesdosis, hochgerechnet aus dem Momentanwert. -->
+    <div class="dli-row" id="dliRow">DLI 12h: <b id="dli12">–</b> · 18h: <b id="dli18">–</b> mol·m⁻²·d⁻¹</div>
     <div class="zone-badge" id="zoneBadge" style="color:var(--muted);border-color:var(--muted)">Kamera starten</div>
   </div>
 
@@ -140,12 +152,13 @@
     </div>
   </div>
 
+  <!-- v3.1 FIX: color:var(--fg) existierte nicht (Variable heißt --text) -->
   <!-- v3.0: Kamera-Wahl. Der Messaufbau sieht die FRONTKAMERA mit
        80 g/m²-Papier als Kosinus-Diffusor vor – bis v2.9 forderte der Code
        aber fest die Rückkamera an (facingMode:'environment'), wodurch bei
        bestimmungsgemäßer Haltung immer die lichtabgewandte Kamera las. -->
   <button id="cameraToggle" onclick="toggleCamera()" style="width:100%;padding:10px;margin-bottom:10px;
-    background:transparent;border:1px solid var(--muted);border-radius:10px;color:var(--fg);
+    background:transparent;border:1px solid var(--muted);border-radius:10px;color:var(--text);
     font-family:var(--mono);font-size:12px;letter-spacing:.06em;cursor:pointer">
     📷 Front (Diffusor)
   </button>
@@ -186,7 +199,7 @@
   <button class="calib-btn" onclick="openCalibModal()">🔧 Kalibrierung</button>
 
   <div class="calib-note">
-    v3.0 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
+    v3.1 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman · DLI · Wake-Lock<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
   </div>
@@ -248,6 +261,10 @@ class AdaptivePPFDKalmanFilter {
     return this.x;
   }
   get innovation(){return this.lastInnovation||0;}
+  // v3.1 FIX: Filterzustand überlebte Stop/Neustart – nach einem Kamerawechsel
+  // oder Neustart konvergierte die Anzeige sichtbar vom ALTEN Messwert aus
+  // (bei Front→Rück ggf. Größenordnungen daneben). Jetzt sauberer Kaltstart.
+  reset(){this.p=1.0;this.x=0.0;this.lastMeasurement=0;this.lastInnovation=0;}
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -707,6 +724,21 @@ async function toggleCamera(){
   if(isMeasuring){stopCamera();await startCamera();} // nahtloser Wechsel
 }
 
+// v3.1: Screen Wake Lock – ohne ihn dunkelt das Display während einer längeren
+// Messung ab und der Lockscreen beendet sie (visibilitychange -> stopCamera).
+// Best-effort: API fehlt auf älteren Browsern, Messung läuft dann trotzdem.
+// Kein Re-Acquire bei visibilitychange nötig: Tab-Wechsel stoppt die Messung
+// ohnehin, und jeder Neustart fordert den Lock neu an.
+let wakeLock=null;
+async function requestWakeLock(){
+  try{wakeLock=await navigator.wakeLock?.request('screen');}
+  catch(e){console.warn('WakeLock nicht verfügbar:',e);}
+}
+function releaseWakeLock(){
+  try{wakeLock?.release();}catch(e){}
+  wakeLock=null;
+}
+
 async function startCamera(){
   try{
     activeStream=await navigator.mediaDevices.getUserMedia({
@@ -742,7 +774,9 @@ async function startCamera(){
       document.getElementById('gainValue').textContent='1.00×'; //       mit reset()
     }
     kalman.r=hardwareSettings.constraintsApplied?2.5:8.0;
+    kalman.reset(); // v3.1: kein Altzustand aus vorheriger Messung/Kamera
     tempCompensator.reset();gainController.reset();appFSM.reset();
+    requestWakeLock(); // v3.1: Display während der Messung wachhalten
     frameCount=0;lastFrameTime=0;smoothedFps=hardwareSettings.frameRate||30;
     pixelStep=4;stepTransitionAccum=0;
     lastFlickerResult={isFlickering:false,modulation:"0.0",freq:"N/A"};
@@ -763,6 +797,7 @@ async function startCamera(){
 
 function stopCamera(){
   isMeasuring=false;
+  releaseWakeLock(); // v3.1
   blackFrameCount=0;blackFrameStage=0; // Watchdog-Reset für nächsten Start
   if(animationFrameId){cancelAnimationFrame(animationFrameId);animationFrameId=null;}
   if(activeStream){activeStream.getTracks().forEach(t=>t.stop());activeStream=null;}
@@ -784,6 +819,13 @@ function stopCamera(){
   document.getElementById('fpsVal').textContent='–';
   document.getElementById('stepVal').textContent='4×';
   document.getElementById('currentRawVal').textContent='–––';
+  // v3.1: AI-Parameter + DLI zeigten nach Stop die letzten Werte weiter an
+  document.getElementById('lightSourceVal').textContent='Unbekannt';
+  document.getElementById('spectralFactorVal').textContent='×1.00';
+  document.getElementById('flickerVal').textContent='OK';
+  document.getElementById('flickerVal').style.color='';
+  document.getElementById('dli12').textContent='–';
+  document.getElementById('dli18').textContent='–';
   document.getElementById('zoneBadge').textContent='Kamera starten';
   document.getElementById('zoneBadge').style.color='var(--muted)';
   document.getElementById('zoneBadge').style.borderColor='var(--muted)';
@@ -1026,6 +1068,13 @@ function processLoop(timestamp){
   document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp
     ?(displayPPFD<10?displayPPFD.toFixed(1):Math.round(displayPPFD))
     :'–––';
+  // v3.1: DLI-Hochrechnung. 1 µmol·m⁻²·s⁻¹ über 1 h = 0.0036 mol·m⁻²
+  // -> DLI = PPFD × 0.0036 × Photoperiode(h). 12h/18h decken die üblichen
+  // Blüte-/Wachstumszyklen ab. Nur gedrosselt updaten (ruhigere Anzeige).
+  if(tempStatus.isWarmedUp&&frameCount%30===0){
+    document.getElementById('dli12').textContent=(displayPPFD*0.0036*12).toFixed(1);
+    document.getElementById('dli18').textContent=(displayPPFD*0.0036*18).toFixed(1);
+  }
   document.getElementById('luxVal').textContent=Math.round(lux);
   document.getElementById('yMeanVal').textContent=yMean_gamma.toFixed(1);
 
