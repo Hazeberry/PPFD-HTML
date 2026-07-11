@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>PPFD Meter Pro v3.1.3-fix</title>
+<title>PPFD Meter Pro v3.1.4</title>
 <style>
   :root{--bg:#0d1f10;--surface:#152118;--border:#2a3d2c;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;--blue:#60a5fa;--purple:#c084fc;--mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;--sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif}
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -72,7 +72,7 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v3.1.3-fix</span>
+  <span class="app-title">PPFD Meter Pro v3.1.4</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
@@ -127,7 +127,7 @@
   <button class="calib-btn" onclick="openCalibModal()">🔧 Kalibrierung</button>
 
   <div class="calib-note">
-    v3.1.3-fix · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
+    v3.1.4 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung · WB-Lock · Zielband-Fallback<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
   </div>
@@ -463,18 +463,18 @@ async function applyHardwareConstraints(stream){
       result.exposureTime=rawExpSec;
       result.frameRate=ns.frameRate||result.frameRate;
       
-      // PATCH C (v3.1.3, korrigiert): Vertraue dem Lock nur wenn:
-      // 1. ns.exposureMode fehlt (undefined/null) → Gerät spiegelt den Modus
-      //    gar nicht, kein Widerspruchsbeleg → Vertrauensvorschuss.
-      // 2. ns.exposureMode === 'manual' → explizit bestätigt.
-      // Die (gestrichene) dritte Bedingung "ns.exposureTime ist gesetzt" ist
-      // KEIN Beleg für manuelle Kontrolle: praktisch jede UVC-/Camera2-Kamera
-      // meldet exposureTime auch im 'continuous'-Modus (den aktuell von der
-      // Auto-Belichtung gewählten Wert). Mit dieser Bedingung würde ein
-      // Gerät, das exposureMode:'manual' still ignoriert und weiter automatisch
-      // belichtet, trotzdem als "Manuell bestätigt" durchgehen – genau das
-      // Bug-#5-Symptom, das dieser Check verhindern soll.
-      const modeConfirmed=!ns.exposureMode || ns.exposureMode==='manual';
+      // PATCH C (v3.1.3, korrigiert #2): modeConfirmed darf NUR greifen, wenn
+      // oben tatsächlich exposureMode:'manual' angefordert wurde (Zweig
+      // Zeile 418). Lief die Funktion stattdessen durch den "else"-Zweig
+      // (Zeile 445, z.B. weil cap.exposureMode gar kein 'manual' anbietet,
+      // aber ISO/WB manuell verfügbar sind), wurde exposureMode nie berührt -
+      // ns.exposureMode wird dann zwangsläufig 'continuous' o.ä. melden,
+      // ohne dass das ein Fehlschlag ist. Ohne dieses Gate fiel die App auf
+      // A17 im Feldtest IMMER auf Software-Gain zurück, selbst wenn ISO-
+      // Manual-Lock erfolgreich griff - ein Regressionsbug ggü. v3.0, das
+      // diesen Check gar nicht kannte.
+      const attemptedManualExposure=(constraints.exposureMode==='manual');
+      const modeConfirmed=!attemptedManualExposure || !ns.exposureMode || ns.exposureMode==='manual';
       
       if(!modeConfirmed){
         console.warn('[PPFD] exposureMode nicht bestätigt:',ns.exposureMode,'- Gerät bleibt vermutlich im Auto-Modus.');
@@ -554,9 +554,10 @@ async function startCamera(){
     blackFrameStage=0;blackFrameCount=0;
     hardwareSettings=await applyHardwareConstraints(activeStream);
     const mode=hardwareSettings.constraintsApplied?'Manuell':(hardwareSettings.fallbackMode?'Software':'Auto');
-    document.getElementById('deviceInfo').textContent=`Gerät: ${hardwareSettings.deviceLabel} · ${mode} · ${hardwareSettings.frameRate?.toFixed(0)||'?'} fps`;
+    const modeSuffix=hardwareSettings.fallbackMode?` (${hardwareSettings.fallbackMode})`:'';
+    document.getElementById('deviceInfo').textContent=`Gerät: ${hardwareSettings.deviceLabel} · ${mode}${modeSuffix} · ${hardwareSettings.frameRate?.toFixed(0)||'?'} fps`;
     document.getElementById('hardwareRow').style.display='flex';
-    document.getElementById('hardwareVal').textContent=mode;
+    document.getElementById('hardwareVal').textContent=mode+modeSuffix;
     document.getElementById('clippingRow').style.display='flex';
     document.getElementById('reliabilityRow').style.display='flex';
     document.getElementById('fpsRow').style.display='flex';
