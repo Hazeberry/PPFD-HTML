@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>PPFD Meter Pro v3.1.3</title>
+<title>PPFD Meter Pro v3.1.3-fix</title>
 <style>
   :root{--bg:#0d1f10;--surface:#152118;--border:#2a3d2c;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;--blue:#60a5fa;--purple:#c084fc;--mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;--sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif}
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -72,12 +72,12 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v3.1.3</span>
+  <span class="app-title">PPFD Meter Pro v3.1.3-fix</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
   <div class="ppfd-card" id="ppfdCard">
- <div class="warmup-overlay" id="warmupOverlay">
+    <div class="warmup-overlay" id="warmupOverlay">
       <span style="font-family:var(--mono);font-size:12px;color:var(--purple)">SENSOR WÄRMT AUF...</span>
       <div class="warmup-bar"><div class="warmup-fill" id="warmupFill"></div></div>
       <span style="font-size:10px;color:var(--muted);margin-top:8px" id="warmupText">0%</span>
@@ -127,7 +127,7 @@
   <button class="calib-btn" onclick="openCalibModal()">🔧 Kalibrierung</button>
 
   <div class="calib-note">
-    v3.1.3 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
+    v3.1.3-fix · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung · WB-Lock · Zielband-Fallback<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
   </div>
@@ -361,6 +361,7 @@ function sampleFrameY(){
   return sum/n;
 }
 
+// --- PATCH A: tuneExposure (exposureMode:'manual' entfernt) ---
 async function tuneExposure(track,cap,startReq){
   let req=startReq,trail=[startReq],y=0;
   const capMin=cap.exposureTime?.min??startReq,capMax=cap.exposureTime?.max??startReq;
@@ -373,18 +374,18 @@ async function tuneExposure(track,cap,startReq){
     prevY=y;
     if(y<25&&req<capMax){
       req=Math.min(req*4,capMax);
-      try{await track.applyConstraints({advanced:[{exposureTime:req,exposureMode:'manual'}]});}catch(e){break;}
+      try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}
       trail.push(req);
     }else if(y>220&&req>capMin){
       req=Math.max(req/4,capMin);
-      try{await track.applyConstraints({advanced:[{exposureTime:req,exposureMode:'manual'}]});}catch(e){break;}
+      try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}
       trail.push(req);
     }else break;
   }
   if(y>220&&req>capMin){
     req=Math.max(req/4,capMin);
     try{
-      await track.applyConstraints({advanced:[{exposureTime:req,exposureMode:'manual'}]});
+      await track.applyConstraints({advanced:[{exposureTime:req}]});
       await new Promise(r=>setTimeout(r,500));
       y=sampleFrameY();
       trail.push(req+'(anti-sat)');
@@ -395,6 +396,7 @@ async function tuneExposure(track,cap,startReq){
   return {req,trail,finalY:y,targetBandMet};
 }
 
+// --- PATCH B, C (NEU), D: applyHardwareConstraints ---
 async function applyHardwareConstraints(stream){
   const track=stream.getVideoTracks()[0];
   const cap=track.getCapabilities(),set=track.getSettings();
@@ -415,6 +417,8 @@ async function applyHardwareConstraints(stream){
     try{
       if(constraints.exposureMode==='manual'){
         await track.applyConstraints({advanced:[{exposureMode:'manual'}]});
+        // PATCH B: 150ms Delay für Camera2-Pipeline-Stabilisierung
+        await new Promise(r=>setTimeout(r,150));
         const phase2={exposureTime:constraints.exposureTime};
         if(constraints.iso!==undefined) phase2.iso=constraints.iso;
         await track.applyConstraints({advanced:[phase2]});
@@ -428,8 +432,12 @@ async function applyHardwareConstraints(stream){
         constraints.exposureTime=tuned.req;
         result.exposureTuneTrail=tuned.trail.join('→');
         result.exposureTuneY=tuned.finalY;
+        // PATCH D: Debug-Anzeige im Early-Return
         if(!tuned.targetBandMet){
- console.warn('[PPFD] tuneExposure außerhalb Zielband (finalY='+tuned.finalY.toFixed(1)+'). Fallback auf Auto.');
+          console.warn('[PPFD] tuneExposure außerhalb Zielband (finalY='+tuned.finalY.toFixed(1)+'). Fallback auf Auto.');
+          const debugStr=`min=${cap.exposureTime?.min ?? '?'} max=${cap.exposureTime?.max ?? '?'} tune=${tuned.trail.join('→')} Y=${tuned.finalY.toFixed(1)} nach=? →FALLBACK`;
+          document.getElementById('debugExpRow').style.display='flex';
+          document.getElementById('debugExpVal').textContent=debugStr;
           result.exposureTime=1/250;
           result.fallbackMode='exposure-out-of-range';
           return result;
@@ -454,11 +462,22 @@ async function applyHardwareConstraints(stream){
       }
       result.exposureTime=rawExpSec;
       result.frameRate=ns.frameRate||result.frameRate;
-      const modeConfirmed=ns.exposureMode
-        ?(ns.exposureMode==='manual'||ns.exposureTime===constraints.exposureTime)
-        :true;
+      
+      // PATCH C (v3.1.3, korrigiert): Vertraue dem Lock nur wenn:
+      // 1. ns.exposureMode fehlt (undefined/null) → Gerät spiegelt den Modus
+      //    gar nicht, kein Widerspruchsbeleg → Vertrauensvorschuss.
+      // 2. ns.exposureMode === 'manual' → explizit bestätigt.
+      // Die (gestrichene) dritte Bedingung "ns.exposureTime ist gesetzt" ist
+      // KEIN Beleg für manuelle Kontrolle: praktisch jede UVC-/Camera2-Kamera
+      // meldet exposureTime auch im 'continuous'-Modus (den aktuell von der
+      // Auto-Belichtung gewählten Wert). Mit dieser Bedingung würde ein
+      // Gerät, das exposureMode:'manual' still ignoriert und weiter automatisch
+      // belichtet, trotzdem als "Manuell bestätigt" durchgehen – genau das
+      // Bug-#5-Symptom, das dieser Check verhindern soll.
+      const modeConfirmed=!ns.exposureMode || ns.exposureMode==='manual';
+      
       if(!modeConfirmed){
-        console.warn('[PPFD] exposureMode nicht "manual":',ns.exposureMode);
+        console.warn('[PPFD] exposureMode nicht bestätigt:',ns.exposureMode,'- Gerät bleibt vermutlich im Auto-Modus.');
         result.fallbackMode='exposure-mode-unconfirmed';
         return result;
       }
