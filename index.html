@@ -3,22 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<!-- v3.1: Metadaten für Teilen/Homescreen; Favicon als Daten-URI (keine externen Requests) -->
-<meta name="description" content="Kamerabasiertes PPFD-Messwerkzeug (µmol·m⁻²·s⁻¹) als einzelne HTML-Datei – offen, kostenlos, komplett lokal im Browser.">
-<meta name="theme-color" content="#0d1f10">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>">
-<title>PPFD Meter Pro v3.1</title>
+<title>PPFD Meter Pro v3.1.2</title>
 <style>
-  
-  :root {
-    --bg:#0d1f10;--surface:#152118;--border:#2a3d2c;
-    --green:#4ade80;--amber:#fbbf24;--red:#f87171;
-    --text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;
-    --blue:#60a5fa;--purple:#c084fc;
-    /* v2.6: Systemfonts statt Google-CDN (offline-fähig, keine IP-Übertragung an Google / DSGVO) */
-    --mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;
-    --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;
-  }
+  :root{--bg:#0d1f10;--surface:#152118;--border:#2a3d2c;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;--blue:#60a5fa;--purple:#c084fc;--mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;--sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif}
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px;-webkit-tap-highlight-color:transparent}
   header{width:100%;max-width:420px;display:flex;justify-content:space-between;align-items:center;padding:12px 0 20px;border-bottom:1px solid var(--border)}
@@ -29,17 +16,12 @@
   .status-dot.error{background:var(--red);box-shadow:0 0 8px var(--red)}
   .status-dot.warmup{background:var(--purple);box-shadow:0 0 8px var(--purple)}
   .status-dot.low_perf{background:var(--muted);box-shadow:none}
-  /* v3.1 FIX: FSM-Zustand CLIPPING setzt die Klasse 'clipping' – dafür gab es
-     keine Regel, der Punkt blieb bei Übersteuerung grün ('active'). */
-  .status-dot.clipping{background:var(--red);box-shadow:0 0 8px var(--red)}
   main{width:100%;max-width:420px;flex:1;display:flex;flex-direction:column;gap:14px;padding-top:20px}
   .ppfd-card{background:var(--card-bg);border:1px solid var(--border);border-radius:16px;padding:28px 24px 22px;text-align:center;position:relative;overflow:hidden}
   .ppfd-card::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,var(--glow-color,#4ade8022) 0%,transparent 70%);pointer-events:none;transition:background .6s}
   .ppfd-label{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-bottom:8px}
   .ppfd-value{font-family:var(--mono);font-size:72px;font-weight:700;line-height:1;transition:color .5s;color:var(--green)}
   .ppfd-unit{font-size:13px;color:var(--muted);margin-top:4px;font-family:var(--mono);letter-spacing:.05em}
-  .dli-row{font-size:11px;color:var(--muted);margin-top:10px;font-family:var(--mono)}
-  .dli-row b{color:var(--text);font-weight:600}
   .zone-badge{display:inline-block;margin-top:14px;padding:4px 14px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;border:1px solid currentColor;transition:all .4s}
   .section-label{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
   .params-card{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:16px}
@@ -90,7 +72,7 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v3.1</span>
+  <span class="app-title">PPFD Meter Pro v3.1.2</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
@@ -103,95 +85,41 @@
     <div class="ppfd-label">Photosynthetisch aktive Photonenflussdichte</div>
     <div class="ppfd-value" id="ppfdVal">–––</div>
     <div class="ppfd-unit">µmol · m⁻² · s⁻¹</div>
-    <!-- v3.1: DLI-Hochrechnung (Daily Light Integral) – die für Grower
-         eigentlich relevante Tagesdosis, hochgerechnet aus dem Momentanwert. -->
-    <div class="dli-row" id="dliRow">DLI 12h: <b id="dli12">–</b> · 18h: <b id="dli18">–</b> mol·m⁻²·d⁻¹</div>
     <div class="zone-badge" id="zoneBadge" style="color:var(--muted);border-color:var(--muted)">Kamera starten</div>
   </div>
 
   <div class="params-card">
     <div class="section-label" style="margin-bottom:0">Erkannte Parameter (AI)</div>
-    <div class="param-row">
-      <span class="param-name">Lichtquelle</span>
-      <span class="param-val" id="lightSourceVal">Unbekannt</span>
-    </div>
-    <div class="param-row">
-      <span class="param-name">Spektral-Faktor</span>
-      <span class="param-val" id="spectralFactorVal">×1.00</span>
-    </div>
-    <div class="param-row">
-      <span class="param-name">Flicker-Status</span>
-      <span class="param-val" id="flickerVal">OK</span>
-    </div>
-    <div class="param-row" id="fpsRow" style="display:none">
-      <span class="param-name">Effektive FPS</span>
-      <span class="param-val" id="fpsVal">–</span>
-    </div>
-    <div class="param-row" id="stepRow" style="display:none">
-      <span class="param-name">Pixel-Step</span>
-      <span class="param-val" id="stepVal">4×</span>
-    </div>
-    <div class="param-row" id="hardwareRow" style="display:none">
-      <span class="param-name">Hardware-Modus</span>
-      <span class="param-val" id="hardwareVal">Auto</span>
-    </div>
-    <!-- TEMPORÄR (v2.7-debug): Rohwerte der Belichtungszeit sichtbar machen,
-         da auf reinem Mobile-Setup keine DevTools-Konsole verfügbar ist.
-         Nach Diagnose der Einheiten-Frage wieder entfernbar. -->
-    <div class="param-row" id="debugExpRow" style="display:none;font-size:10px;opacity:.75">
-      <span class="param-name">Debug: Exposure raw</span>
-      <span class="param-val" id="debugExpVal" style="font-family:var(--mono)">–</span>
-    </div>
-    <div class="param-row" id="clippingRow" style="display:none">
-      <span class="param-name">Clipping</span>
-      <span class="param-val" id="clippingVal" style="color:var(--green)">OK</span>
-    </div>
-    <div class="param-row" id="reliabilityRow" style="display:none">
-      <span class="param-name">Messzuverlässigkeit</span>
-      <span class="param-val" id="reliabilityVal">100%</span>
-    </div>
+    <div class="param-row"><span class="param-name">Lichtquelle</span><span class="param-val" id="lightSourceVal">Unbekannt</span></div>
+    <div class="param-row"><span class="param-name">Spektral-Faktor</span><span class="param-val" id="spectralFactorVal">×1.00</span></div>
+    <div class="param-row"><span class="param-name">Flicker-Status</span><span class="param-val" id="flickerVal">OK</span></div>
+    <div class="param-row" id="fpsRow" style="display:none"><span class="param-name">Effektive FPS</span><span class="param-val" id="fpsVal">–</span></div>
+    <div class="param-row" id="stepRow" style="display:none"><span class="param-name">Pixel-Step</span><span class="param-val" id="stepVal">4×</span></div>
+    <div class="param-row" id="hardwareRow" style="display:none"><span class="param-name">Hardware-Modus</span><span class="param-val" id="hardwareVal">Auto</span></div>
+    <div class="param-row" id="debugExpRow" style="display:none;font-size:10px;opacity:.75"><span class="param-name">Debug: Exposure raw</span><span class="param-val" id="debugExpVal" style="font-family:var(--mono)">–</span></div>
+    <div class="param-row" id="clippingRow" style="display:none"><span class="param-name">Clipping</span><span class="param-val" id="clippingVal" style="color:var(--green)">OK</span></div>
+    <div class="param-row" id="reliabilityRow" style="display:none"><span class="param-name">Messzuverlässigkeit</span><span class="param-val" id="reliabilityVal">100%</span></div>
   </div>
 
-  <!-- v3.1 FIX: color:var(--fg) existierte nicht (Variable heißt --text) -->
-  <!-- v3.0: Kamera-Wahl. Der Messaufbau sieht die FRONTKAMERA mit
-       80 g/m²-Papier als Kosinus-Diffusor vor – bis v2.9 forderte der Code
-       aber fest die Rückkamera an (facingMode:'environment'), wodurch bei
-       bestimmungsgemäßer Haltung immer die lichtabgewandte Kamera las. -->
-  <button id="cameraToggle" onclick="toggleCamera()" style="width:100%;padding:10px;margin-bottom:10px;
-    background:transparent;border:1px solid var(--muted);border-radius:10px;color:var(--text);
-    font-family:var(--mono);font-size:12px;letter-spacing:.06em;cursor:pointer">
-    📷 Front (Diffusor)
-  </button>
+  <button id="cameraToggle" onclick="toggleCamera()" style="width:100%;padding:10px;margin-bottom:10px;background:transparent;border:1px solid var(--muted);border-radius:10px;color:var(--text);font-family:var(--mono);font-size:12px;letter-spacing:.06em;cursor:pointer">📷 Front (Diffusor)</button>
 
   <button class="measure-btn" id="startBtn" onclick="startCamera()">Kamera aktivieren</button>
   <button class="stop-btn" id="stopBtn" onclick="stopCamera()">Messung stoppen</button>
 
   <div class="gain-control" id="gainControl">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-      <span class="section-label" style="margin:0">Software-Gain (Fallback)</span>
-      <span class="fallback-badge">Fallback</span>
+      <span class="section-label" style="margin:0">Software-Gain (Fallback)</span><span class="fallback-badge">Fallback</span>
     </div>
     <input type="range" class="gain-slider" id="gainSlider" min="0.1" max="5.0" step="0.05" value="1.0">
     <div class="gain-labels"><span>0.1×</span><span>Neutral</span><span>5.0×</span></div>
     <div class="gain-value" id="gainValue">1.00×</div>
-    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4">
-      Manueller Korrekturfaktor | Y-Mean: <span id="yCurrentVal">–</span> | Trend: <span id="yTrendVal">–</span>
-    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4">Manueller Korrekturfaktor | Y-Mean: <span id="yCurrentVal">–</span> | Trend: <span id="yTrendVal">–</span></div>
   </div>
 
   <div class="info-bar">
-    <div class="info-chip">
-      <div class="chip-val" id="luxVal">–</div>
-      <div class="chip-lbl">Lux (Raw)</div>
-    </div>
-    <div class="info-chip">
-      <div class="chip-val" id="yMeanVal">–</div>
-      <div class="chip-lbl">Y-Mean</div>
-    </div>
-    <div class="info-chip">
-      <div class="chip-val" id="confVal">–</div>
-      <div class="chip-lbl">AI Conf.</div>
-    </div>
+    <div class="info-chip"><div class="chip-val" id="luxVal">–</div><div class="chip-lbl">Lux (Raw)</div></div>
+    <div class="info-chip"><div class="chip-val" id="yMeanVal">–</div><div class="chip-lbl">Y-Mean</div></div>
+    <div class="info-chip"><div class="chip-val" id="confVal">–</div><div class="chip-lbl">AI Conf.</div></div>
   </div>
 
   <div class="flicker-warning" id="flickerWarning">⚠️ FLICKER ERKANNT</div>
@@ -199,7 +127,7 @@
   <button class="calib-btn" onclick="openCalibModal()">🔧 Kalibrierung</button>
 
   <div class="calib-note">
-    v3.1 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman · DLI · Wake-Lock<br>
+    v3.1.2 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
   </div>
@@ -212,9 +140,7 @@
 <div class="modal-overlay" id="calibModal">
   <div class="modal">
     <h3>🔧 PPFD-Kalibrierung</h3>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5">
-      Referenz-PAR-Meter daneben halten und Wert eingeben um den Spektral-Faktor zu justieren.
-    </p>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5">Referenz-PAR-Meter daneben halten und Wert eingeben um den Spektral-Faktor zu justieren.</p>
     <div class="calib-input-group">
       <label>Referenz-PPFD (µmol·m⁻²·s⁻¹)</label>
       <input type="number" id="refPPFD" placeholder="z.B. 450" step="1">
@@ -234,53 +160,41 @@
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════════════
-// GLOBALE LUT – O(1) Gamma-Dekompression
-// ═══════════════════════════════════════════════════════════
 const gammaLUT = new Float32Array(256);
 for (let i = 0; i < 256; i++) gammaLUT[i] = Math.pow(i / 255, 2.2);
 const Y_R = 0.2126, Y_G = 0.7152, Y_B = 0.0722;
 
-// ═══════════════════════════════════════════════════════════
-// 1. ADAPTIVER KALMAN FILTER – MIT EXPONIERTER INNOVATION
-// ═══════════════════════════════════════════════════════════
 class AdaptivePPFDKalmanFilter {
-  constructor(q=0.02,r=2.50,p=1.0,x=0.0){
-    this.q=q;this.r=r;this.p=p;this.x=x;
-    this.lastMeasurement=x;this.lastInnovation=0;
-  }
+  constructor(q=0.02,r=2.50,p=1.0,x=0.0){this.q=q;this.r=r;this.p=p;this.x=x;this.lastMeasurement=x;this.lastInnovation=0;}
   update(measurement){
     const delta=Math.abs(measurement-this.lastMeasurement);
     const qAdaptive=delta>500?this.q*10:this.q;
     this.p+=qAdaptive;
     const k=this.p/(this.p+this.r);
-    this.lastInnovation=Math.abs(measurement-this.x); // VOR dem Update
+    this.lastInnovation=Math.abs(measurement-this.x);
     this.x+=k*(measurement-this.x);
     this.p=(1-k)*this.p;
     this.lastMeasurement=measurement;
     return this.x;
   }
   get innovation(){return this.lastInnovation||0;}
-  // v3.1 FIX: Filterzustand überlebte Stop/Neustart – nach einem Kamerawechsel
-  // oder Neustart konvergierte die Anzeige sichtbar vom ALTEN Messwert aus
-  // (bei Front→Rück ggf. Größenordnungen daneben). Jetzt sauberer Kaltstart.
-  reset(){this.p=1.0;this.x=0.0;this.lastMeasurement=0;this.lastInnovation=0;}
 }
 
-// ═══════════════════════════════════════════════════════════
-// 2. LIGHT SOURCE AI MIT HYSTERESE
-// ═══════════════════════════════════════════════════════════
 class LightSourceDetector {
   constructor(){
     this.profiles={
-      'SUNLIGHT':  {r:0.33,g:0.34,factor:0.0185,name:'Sonnenlicht'},
-      'LED_GROW':  {r:0.45,g:0.25,factor:0.0155,name:'LED Grow'},
+      'SUNLIGHT':{r:0.33,g:0.34,factor:0.0185,name:'Sonnenlicht'},
+      'LED_GROW':{r:0.45,g:0.25,factor:0.0155,name:'LED Grow'},
       'SODIUM_HPS':{r:0.52,g:0.41,factor:0.0122,name:'Natriumdampf'},
       'WHITE_FLUO':{r:0.30,g:0.38,factor:0.0140,name:'Leuchtstoff'}
     };
-    this.lastDetection=null;this.detectionCounter=0;this.hysteresisThreshold=3;
+    this.lastDetection=null;this.detectionCounter=0;this.hysteresisThreshold=3;this.locked=false;
   }
   detect(R,G,B){
+    if(this.locked && this.lastDetection){
+      const p=this.profiles[this.lastDetection.key];
+      return{id:this.lastDetection.key,name:p.name+' (fixiert)',factor:p.factor,conf:this.lastDetection.conf||0.5};
+    }
     const sum=R+G+B;
     if(sum<30) return{id:'UNKNOWN',name:'Zu dunkel',factor:0.0185,conf:0};
     const r=R/sum,g=G/sum;
@@ -294,14 +208,14 @@ class LightSourceDetector {
       if(this.detectionCounter<this.hysteresisThreshold) bestKey=this.lastDetection.key;
       else this.detectionCounter=0;
     } else {this.detectionCounter=0;}
-    this.lastDetection={key:bestKey,dist:minDist};
-    return{id:bestKey,name:this.profiles[bestKey].name,factor:this.profiles[bestKey].factor,conf:Math.max(0,1-minDist*5)};
+    const conf=Math.max(0,1-minDist*5);
+    this.lastDetection={key:bestKey,dist:minDist,conf:conf};
+    return{id:bestKey,name:this.profiles[bestKey].name,factor:this.profiles[bestKey].factor,conf:conf};
   }
+  lock(){this.locked=true;}
+  unlock(){this.locked=false;this.lastDetection=null;this.detectionCounter=0;}
 }
 
-// ═══════════════════════════════════════════════════════════
-// 3. SPATIAL FLICKER DETECTOR – DYNAMISCHE FPS + VBLANK
-// ═══════════════════════════════════════════════════════════
 class SpatialFlickerDetector {
   constructor(vblankFactor=0.95){this.vblankFactor=vblankFactor;}
   detect(rowAverages,currentFps){
@@ -312,55 +226,35 @@ class SpatialFlickerDetector {
     const maxVal=Math.max(...rowAverages),minVal=Math.min(...rowAverages);
     const modulation=((maxVal-minVal)/(maxVal+minVal))*100;
     let zeroCrossings=0;
-    for(let i=1;i<n;i++){
-      if((rowAverages[i]-mean)*(rowAverages[i-1]-mean)<0) zeroCrossings++;
-    }
-    // v2.5: Dynamische Frequenz basierend auf nativer FPS + VBlank-Kompensation
+    for(let i=1;i<n;i++){if((rowAverages[i]-mean)*(rowAverages[i-1]-mean)<0) zeroCrossings++;}
     const estimatedFreq=zeroCrossings>0?(zeroCrossings/2)*(currentFps/this.vblankFactor):0;
-    return{
-      isFlickering:modulation>5.0,
-      modulation:modulation.toFixed(1),
-      freq:estimatedFreq>0?'~'+Math.round(estimatedFreq)+' Hz':'N/A'
-    };
+    return{isFlickering:modulation>5.0,modulation:modulation.toFixed(1),freq:estimatedFreq>0?'~'+Math.round(estimatedFreq)+' Hz':'N/A'};
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// 4. SOFTWARE GAIN CONTROLLER
-// ═══════════════════════════════════════════════════════════
-// v2.6 FIX: Auto-Adjust entfernt. Der Gain veränderte die Pixeldaten nie,
-// yMean blieb also konstant -> der Regelkreis war offen und ratschte alle 2s
-// Richtung Anschlag (0.1×/5.0×), wodurch die Anzeige über Minuten um bis zu
-// Faktor 5–10 driftete. Jetzt rein manueller Korrekturfaktor + Y-Diagnose.
 class SoftwareGainController {
-  constructor(){
-    this.gain=1.0;
-    this.history=[];this.maxHistory=30;
-  }
+  constructor(){this.gain=1.0;this.history=[];this.maxHistory=30;}
   setGain(value){this.gain=parseFloat(value);}
   calculateTrend(values){
     const n=values.length;if(n<2) return 0;
-    let sumX=0,sumY=0,sumXY=0,sumX2=0;
-    for(let i=0;i<n;i++){sumX+=i;sumY+=values[i].value;sumXY+=i*values[i].value;sumX2+=i*i;}
-    const denom=n*sumX2-sumX*sumX;
-    return denom===0?0:(n*sumXY-sumX*sumY)/denom;
+    let sx=0,sy=0,sxy=0,sx2=0;
+    for(let i=0;i<n;i++){sx+=i;sy+=values[i].value;sxy+=i*values[i].value;sx2+=i*i;}
+    const d=n*sx2-sx*sx;
+    return d===0?0:(n*sxy-sx*sy)/d;
   }
   update(yMean,timestamp){
     this.history.push({value:yMean,time:timestamp});
     if(this.history.length>this.maxHistory) this.history.shift();
     document.getElementById('yCurrentVal').textContent=yMean.toFixed(1);
     if(this.history.length>=2){
-      const trend=this.calculateTrend(this.history.slice(-10));
-      document.getElementById('yTrendVal').textContent=(trend>0.5?'↑':trend<-0.5?'↓':'→')+' '+Math.abs(trend).toFixed(1);
+      const t=this.calculateTrend(this.history.slice(-10));
+      document.getElementById('yTrendVal').textContent=(t>0.5?'↑':t<-0.5?'↓':'→')+' '+Math.abs(t).toFixed(1);
     }
     return this.gain;
   }
   reset(){this.gain=1.0;this.history=[];}
 }
 
-// ═══════════════════════════════════════════════════════════
-// 5. CLIPPING DETEKTOR
-// ═══════════════════════════════════════════════════════════
 class ClippingDetector {
   analyze(clippingPixels,totalPixels){
     const ratio=clippingPixels/totalPixels;
@@ -370,116 +264,76 @@ class ClippingDetector {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// 6. TEMPERATUR-KOMPENSATION
-// ═══════════════════════════════════════════════════════════
 class TemperatureCompensator {
   constructor(){this.warmupFrames=300;this.framesCaptured=0;}
   update(){
     this.framesCaptured++;
-    const progress=Math.min(100,(this.framesCaptured/this.warmupFrames)*100);
-    if(this.framesCaptured<this.warmupFrames){
-      return{factor:1.0-(0.02*(1-this.framesCaptured/this.warmupFrames)),progress,isWarmedUp:false};
-    }
+    const p=Math.min(100,(this.framesCaptured/this.warmupFrames)*100);
+    if(this.framesCaptured<this.warmupFrames) return{factor:1.0-(0.02*(1-this.framesCaptured/this.warmupFrames)),progress:p,isWarmedUp:false};
     return{factor:1.0,progress:100,isWarmedUp:true};
   }
   reset(){this.framesCaptured=0;}
 }
 
-// ═══════════════════════════════════════════════════════════
-// 7. FSM – HYSTERESE-BASIERTE STATE MACHINE (Schmitt-Trigger)
-// ═══════════════════════════════════════════════════════════
 class AppStatusStateMachine {
   constructor(){
-    this.STATES={
-      WARMUP:  {id:'WARMUP',  color:'var(--purple)',label:'SENS_WARMUP'},
-      STABLE:  {id:'STABLE',  color:'var(--green)', label:'OPTIMAL'},
-      FLICKER: {id:'FLICKER', color:'var(--amber)', label:'FLICKER_WARN'},
-      CLIPPING:{id:'CLIPPING',color:'var(--red)',   label:'OVEREXPOSED'},
-      LOW_PERF:{id:'LOW_PERF',color:'var(--muted)', label:'CPU_LIMIT'}
-    };
+    this.STATES={WARMUP:{id:'WARMUP',color:'var(--purple)',label:'SENS_WARMUP'},STABLE:{id:'STABLE',color:'var(--green)',label:'OPTIMAL'},FLICKER:{id:'FLICKER',color:'var(--amber)',label:'FLICKER_WARN'},CLIPPING:{id:'CLIPPING',color:'var(--red)',label:'OVEREXPOSED'},LOW_PERF:{id:'LOW_PERF',color:'var(--muted)',label:'CPU_LIMIT'}};
     this.current=this.STATES.WARMUP;
     this.acc={flicker:0,clipping:0,perf:0};
-    this.LIMITS={
-      FLICKER_ENTER:20,FLICKER_EXIT:0,
-      CLIP_ENTER:5,   CLIP_EXIT:0,
-      PERF_ENTER:45,  PERF_EXIT:0
-    };
+    this.LIMITS={FLICKER_ENTER:20,FLICKER_EXIT:0,CLIP_ENTER:5,CLIP_EXIT:0,PERF_ENTER:45,PERF_EXIT:0};
   }
   update(warmedUp,flickering,isClipping,fps){
     if(!warmedUp){this.current=this.STATES.WARMUP;return this.current;}
-    this.acc.flicker =flickering  ?Math.min(60,this.acc.flicker+1) :Math.max(0,this.acc.flicker-1);
-    this.acc.clipping=isClipping  ?Math.min(60,this.acc.clipping+1):Math.max(0,this.acc.clipping-1);
-    this.acc.perf    =(fps<18)    ?Math.min(60,this.acc.perf+1)    :Math.max(0,this.acc.perf-1);
+    this.acc.flicker=flickering?Math.min(60,this.acc.flicker+1):Math.max(0,this.acc.flicker-1);
+    this.acc.clipping=isClipping?Math.min(60,this.acc.clipping+1):Math.max(0,this.acc.clipping-1);
+    this.acc.perf=(fps<18)?Math.min(60,this.acc.perf+1):Math.max(0,this.acc.perf-1);
     switch(this.current.id){
-      case 'WARMUP':
-        this.current=this.STATES.STABLE;break;
+      case 'WARMUP': this.current=this.STATES.STABLE;break;
       case 'STABLE':
-        if(this.acc.clipping>=this.LIMITS.CLIP_ENTER)    this.current=this.STATES.CLIPPING;
+        if(this.acc.clipping>=this.LIMITS.CLIP_ENTER) this.current=this.STATES.CLIPPING;
         else if(this.acc.flicker>=this.LIMITS.FLICKER_ENTER) this.current=this.STATES.FLICKER;
-        else if(this.acc.perf>=this.LIMITS.PERF_ENTER)       this.current=this.STATES.LOW_PERF;
+ else if(this.acc.perf>=this.LIMITS.PERF_ENTER) this.current=this.STATES.LOW_PERF;
         break;
       case 'FLICKER':
-        if(this.acc.clipping>=this.LIMITS.CLIP_ENTER)    this.current=this.STATES.CLIPPING;
-        else if(this.acc.flicker<=this.LIMITS.FLICKER_EXIT)  this.current=this.STATES.STABLE;
+        if(this.acc.clipping>=this.LIMITS.CLIP_ENTER) this.current=this.STATES.CLIPPING;
+        else if(this.acc.flicker<=this.LIMITS.FLICKER_EXIT) this.current=this.STATES.STABLE;
         break;
-      case 'CLIPPING':
-        if(this.acc.clipping<=this.LIMITS.CLIP_EXIT) this.current=this.STATES.STABLE;break;
-      case 'LOW_PERF':
-        if(this.acc.perf<=this.LIMITS.PERF_EXIT) this.current=this.STATES.STABLE;break;
+      case 'CLIPPING': if(this.acc.clipping<=this.LIMITS.CLIP_EXIT) this.current=this.STATES.STABLE;break;
+      case 'LOW_PERF': if(this.acc.perf<=this.LIMITS.PERF_EXIT) this.current=this.STATES.STABLE;break;
     }
     return this.current;
   }
   reset(){this.current=this.STATES.WARMUP;this.acc={flicker:0,clipping:0,perf:0};}
 }
 
-// ═══════════════════════════════════════════════════════════
-// GLOBAL STATE
-// ═══════════════════════════════════════════════════════════
-const kalman         = new AdaptivePPFDKalmanFilter(0.02,2.50,1.0,0.0);
-const lightDetector  = new LightSourceDetector();
-const flickerDetector= new SpatialFlickerDetector(0.95);
-const gainController = new SoftwareGainController();
+const kalman=new AdaptivePPFDKalmanFilter(0.02,2.50,1.0,0.0);
+const lightDetector=new LightSourceDetector();
+const flickerDetector=new SpatialFlickerDetector(0.95);
+const gainController=new SoftwareGainController();
 const clippingDetector=new ClippingDetector();
-const tempCompensator= new TemperatureCompensator();
-const appFSM         = new AppStatusStateMachine();
+const tempCompensator=new TemperatureCompensator();
+const appFSM=new AppStatusStateMachine();
 
 let isMeasuring=false,currentFactor=0.0185,currentLightSourceName='SUNLIGHT';
 let lastAiUpdate=0,hardwareSettings=null,useSoftwareGain=false;
-let customCalibFactor=null,activeStream=null,currentRawPPFD=0,frameCount=0,animationFrameId=null;
-// Schwarzbild-Watchdog: Stage 0 = beobachten, 1 = Manuell-Modus wurde
-// verworfen (Auto-Fallback aktiv), 2 = endgültiger Sensorfehler gemeldet.
+let wbManual=false;
+let customCalibFactor=null,activeStream=null,currentRawPPFD=0,currentRawPPFDUncalibrated=0,frameCount=0,animationFrameId=null;
 let blackFrameCount=0,blackFrameStage=0;
-// v2.6: Persistierten Kalibrier-Faktor laden (loadCalibFactor ist gehoisted,
-// CALIB_KEY muss wegen TDZ vor dem Aufruf deklariert sein)
 const CALIB_KEY='ppfd_calibFactor';
-// v3.0: Kamera-Wahl, persistiert. Standard = Frontkamera ('user'), da der
-// Messaufbau (Papier-Diffusor auf der Frontlinse) dafür ausgelegt ist.
-// Muss VOR customCalibFactor=loadCalibFactor() deklariert sein (TDZ).
 let cameraFacing=(()=>{try{return localStorage.getItem('ppfd_camera')||'user';}catch(e){return 'user';}})();
 customCalibFactor=loadCalibFactor();
 
-// v2.5: Inter-Frame-Timing
 let lastFrameTime=0,smoothedFps=30;
-
-// v2.5: Adaptives Subsampling
 let pixelStep=4,stepTransitionAccum=0;
-
-// v2.5: Flicker-Reliability-Gate (Hysterese)
 let flickerReliable=true,lowFpsFrameCount=0;
 const FPS_THRESHOLD_LOW=15,FPS_THRESHOLD_HIGH=20,FPS_CONFIRM_FRAMES=10;
-
-// Letztes Flicker-Ergebnis für FSM
 let lastFlickerResult={isFlickering:false,modulation:"0.0",freq:"N/A"};
 
 const APERTURE_SQ=4.0,ISO=100,EXPOSURE_TIME=1/250;
-const video =document.getElementById('videoFeed');
+const video=document.getElementById('videoFeed');
 const canvas=document.getElementById('processCanvas');
-const ctx   =canvas.getContext('2d',{willReadFrequently:true});
+const ctx=canvas.getContext('2d',{willReadFrequently:true});
 
-// ═══════════════════════════════════════════════════════════
-// UI HELPERS
-// ═══════════════════════════════════════════════════════════
 function showError(msg){
   const t=document.getElementById('errorToast');
   t.textContent=msg;t.classList.add('show');
@@ -491,76 +345,54 @@ function setButtonState(state){
   else{s.style.display='block';s.disabled=false;s.textContent='Kamera aktivieren';p.classList.remove('visible');}
 }
 
-// ═══════════════════════════════════════════════════════════
-// HARDWARE
-// ═══════════════════════════════════════════════════════════
 function getDynamicCalibrationConstant(iso,exposureTime){
   let c=1284;
   if(iso>800) c*=0.88;else if(iso>400) c*=0.95;
   if(exposureTime>1/30) c*=0.98;
   return c;
 }
-// v2.6 FIX: exposureTime der MediaCapture-API ist in 100-µs-Einheiten definiert
-// (W3C mediacapture-image), NICHT in Sekunden. Intern rechnen wir durchgehend in
-// Sekunden – v2.5 hat beides gemischt (Ergebnis auf Manual-Exposure-Geräten um
-// Größenordnungen falsch) und 1/250 als Constraint angefordert (= 0,4 µs).
-const EXP_UNIT=1e-4; // 100 µs in Sekunden
+const EXP_UNIT=1e-4;
 
-// v2.9: Schneller Y-Mean-Sample eines einzelnen Frames (für Belichtungssuche,
-// bevor die Hauptschleife läuft). Grobes Subsampling reicht hier.
 function sampleFrameY(){
   ctx.drawImage(video,0,0,320,240);
   const d=ctx.getImageData(0,0,320,240).data;
-  let s=0,n=0;
-  for(let i=0;i<d.length;i+=32){s+=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];n++;}
-  return s/n;
+  let sum=0,n=0;
+  for(let i=0;i<d.length;i+=32){sum+=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];n++;}
+  return sum/n;
 }
 
-// v2.9: ADAPTIVE BELICHTUNGSSUCHE. Hintergrund: getSettings() echoet nur den
-// angeforderten Zahlenwert zurück – ob der Treiber ihn als 100-µs-Einheiten
-// (W3C), µs oder sonstwas interpretiert, ist von außen unsichtbar. Beobachtet:
-// Y-Mean~7 trotz heller Szene, d.h. die physische Belichtung war mutmaßlich
-// viel kürzer als angefordert. Statt der Einheiten-Annahme zu vertrauen,
-// prüfen wir das ERGEBNIS (Y-Mean) und stufen die Belichtung nach, bis das
-// Bild im Zielband liegt. Damit ist die Treiber-Einheit egal; die Absolut-
-// skala übernimmt die Nutzer-Kalibrierung gegen ein Referenz-PAR-Meter.
 async function tuneExposure(track,cap,startReq){
-  let req=startReq;const trail=[req];let y=0;
+  let req=startReq,trail=[startReq],y=0;
   const capMin=cap.exposureTime?.min??startReq,capMax=cap.exposureTime?.max??startReq;
+  let prevY=sampleFrameY();
   for(let iter=0;iter<6;iter++){
-    await new Promise(r=>setTimeout(r,350)); // Sensor/ISP Zeit zum Nachregeln geben
+    await new Promise(r=>setTimeout(r,500));
     y=sampleFrameY();
-    if(y<25&&req<capMax){
-      req=Math.min(req*4,capMax);
-      try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}
-      trail.push(req);
-    }else if(y>220&&req>capMin){
-      req=Math.max(req/4,capMin);
-      try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}
-      trail.push(req);
-    }else break;
+    let stall=0;
+    while(Math.abs(y-prevY)<2&&stall<5){await new Promise(r=>setTimeout(r,200));y=sampleFrameY();stall++;}
+    prevY=y;
+    if(y<25&&req<capMax){req=Math.min(req*4,capMax);try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}trail.push(req);}
+    else if(y>220&&req>capMin){req=Math.max(req/4,capMin);try{await track.applyConstraints({advanced:[{exposureTime:req}]});}catch(e){break;}trail.push(req);}
+    else break;
   }
-  return {req,trail,finalY:y};
+  if(y>220&&req>capMin){
+    req=Math.max(req/4,capMin);
+    try{await track.applyConstraints({advanced:[{exposureTime:req}]});await new Promise(r=>setTimeout(r,500));y=sampleFrameY();trail.push(req+'(anti-sat)');}catch(e){}
+  }
+  const targetBandMet=y>=25&&y<=220;
+  if(!targetBandMet){try{await track.applyConstraints({advanced:[{exposureMode:'continuous'}]});}catch(e){}}
+  return {req,trail,finalY:y,targetBandMet};
 }
 
 async function applyHardwareConstraints(stream){
   const track=stream.getVideoTracks()[0];
   const cap=track.getCapabilities(),set=track.getSettings();
-  const result={
-    iso:set.iso||100,
-    exposureTime:set.exposureTime?set.exposureTime*EXP_UNIT:1/250, // -> Sekunden
-    frameRate:set.frameRate||30,  // v2.5: Native FPS erfassen
-    whiteBalanceMode:set.whiteBalanceMode||'continuous',
-    constraintsApplied:false,
-    deviceLabel:track.label||'Unbekannt'
-  };
+  const result={iso:set.iso||100,exposureTime:set.exposureTime?set.exposureTime*EXP_UNIT:1/250,frameRate:set.frameRate||30,whiteBalanceMode:set.whiteBalanceMode||'continuous',wbManual:false,constraintsApplied:false,deviceLabel:track.label||'Unbekannt'};
   const constraints={};
   if(cap.exposureMode?.includes('manual')){
-    constraints.exposureMode='manual';
-    let expReq=Math.round((1/250)/EXP_UNIT); // 1/250 s = 40 (100-µs-Einheiten)
-    if(cap.exposureTime){ // In den vom Gerät unterstützten Bereich clampen
-      expReq=Math.min(Math.max(expReq,cap.exposureTime.min??expReq),cap.exposureTime.max??expReq);
-    }
+ constraints.exposureMode='manual';
+    let expReq=Math.round((1/250)/EXP_UNIT);
+    if(cap.exposureTime){expReq=Math.min(Math.max(expReq,cap.exposureTime.min??expReq),cap.exposureTime.max??expReq);}
     constraints.exposureTime=expReq;
   }
   if(cap.iso) constraints.iso=100;
@@ -570,11 +402,6 @@ async function applyHardwareConstraints(stream){
   }
   if(Object.keys(constraints).length>0){
     try{
-      // FIX (webrtcHacks-Referenz): exposureMode und exposureTime MÜSSEN in
-      // getrennten applyConstraints-Aufrufen gesetzt werden. Der Wechsel in
-      // den manuellen Modus muss erst abgeschlossen sein, sonst ignoriert
-      // der Browser das exposureTime – der Sensor hängt dann im Manuell-
-      // Modus mit undefinierter Belichtung (plausibel: Schwarzbild).
       if(constraints.exposureMode==='manual'){
         await track.applyConstraints({advanced:[{exposureMode:'manual'}]});
         const phase2={exposureTime:constraints.exposureTime};
@@ -584,86 +411,65 @@ async function applyHardwareConstraints(stream){
           const phase3={whiteBalanceMode:'manual'};
           if(constraints.colorTemperature) phase3.colorTemperature=constraints.colorTemperature;
           await track.applyConstraints({advanced:[phase3]});
+          result.wbManual=true;
         }
-        // v2.9: Ergebnis-basierte Nachjustierung – korrigiert Treiber-seitige
-        // Einheiten-Abweichungen, die getSettings() nicht sichtbar macht.
         const tuned=await tuneExposure(track,cap,constraints.exposureTime);
         constraints.exposureTime=tuned.req;
         result.exposureTuneTrail=tuned.trail.join('→');
         result.exposureTuneY=tuned.finalY;
+        if(!tuned.targetBandMet){
+          console.warn('[PPFD] tuneExposure außerhalb Zielband (finalY='+tuned.finalY.toFixed(1)+'). Fallback auf Auto.');
+          result.exposureTime=1/250;
+          result.fallbackMode='exposure-out-of-range';
+          return result;
+        }
       }else{
         await track.applyConstraints({advanced:[constraints]});
+        if(constraints.whiteBalanceMode==='manual') result.wbManual=true;
       }
       const ns=track.getSettings();
-      // DIAGNOSE (temporär): Rohwerte sichtbar machen, um Einheiten-Annahme
-      // zu verifizieren – Android/Camera2 liefert exposureTime nativ in
-      // Nanosekunden, W3C verlangt 100-µs-Einheiten. Manche Chrome-Builds
-      // reichen den rohen Treiberwert unkonvertiert durch.
-      const debugStr=`min=${cap.exposureTime?.min ?? '?'} max=${cap.exposureTime?.max ?? '?'} `+
-        `tune=${result.exposureTuneTrail ?? '–'} Y=${result.exposureTuneY?.toFixed(1) ?? '?'} `+
-        `nach=${ns.exposureTime ?? '?'} →${ns.exposureTime?(ns.exposureTime*EXP_UNIT).toFixed(6):'?'}s`;
-      const dbgRow=document.getElementById('debugExpRow'),dbgVal=document.getElementById('debugExpVal');
-      dbgRow.style.display='flex';dbgVal.textContent=debugStr;
+      if(result.wbManual && ns.whiteBalanceMode) result.wbManual=ns.whiteBalanceMode==='manual';
+      const debugStr=`min=${cap.exposureTime?.min ?? '?'} max=${cap.exposureTime?.max ?? '?'} tune=${result.exposureTuneTrail ?? '–'} Y=${result.exposureTuneY?.toFixed(1) ?? '?'} nach=${ns.exposureTime ?? '?'} →${ns.exposureTime?(ns.exposureTime*EXP_UNIT).toFixed(6):'?'}s`;
+      document.getElementById('debugExpRow').style.display='flex';
+      document.getElementById('debugExpVal').textContent=debugStr;
       console.log('[PPFD DEBUG]',debugStr);
       result.iso=ns.iso||result.iso;
       const rawExpSec=ns.exposureTime?ns.exposureTime*EXP_UNIT:result.exposureTime;
-      // GUARD: Ein Foto-Sensor belichtet realistisch zwischen ~1µs und ~2s.
-      // Liegt der umgerechnete Wert weit außerhalb, ist die Einheiten-Annahme
-      // (100-µs-Schritte) für dieses Gerät vermutlich falsch (z.B. Rohwert
-      // tatsächlich in Nanosekunden) -> Constraint verwerfen statt mit einer
-      // Größenordnungen falschen Zahl weiterzurechnen (führt sonst zu PPFD≈0
-      // unabhängig von der realen Helligkeit).
       if(rawExpSec>2||rawExpSec<1e-6){
-        console.warn('[PPFD] Unplausible exposureTime nach Konvertierung:',rawExpSec,
-          's – vermutlich Einheiten-Mismatch (Nanosekunden statt 100-µs) auf diesem Gerät. '+
-          'Falle zurück auf Software-Gain-Modus.');
-        result.exposureTime=1/250; // Fallback: Default-Wert, nicht der kaputte Messwert
+        console.warn('[PPFD] Unplausible exposureTime:',rawExpSec,'s – Einheiten-Mismatch? Fallback auf Software-Gain.');
+        result.exposureTime=1/250;
         result.fallbackMode='exposure-unit-mismatch';
-        return result; // constraintsApplied bleibt false -> Software-Gain-Pfad greift
+        return result;
       }
       result.exposureTime=rawExpSec;
-      result.frameRate=ns.frameRate||result.frameRate;  // v2.5
+      result.frameRate=ns.frameRate||result.frameRate;
+      const modeConfirmed=ns.exposureMode?ns.exposureMode==='manual':true;
+      if(!modeConfirmed){
+        console.warn('[PPFD] exposureMode nicht "manual":',ns.exposureMode);
+        result.fallbackMode='exposure-mode-unconfirmed';
+        return result;
+      }
       result.constraintsApplied=true;
     }catch(e){console.warn('HW-Constraints fehlgeschlagen:',e);result.fallbackMode='software-lock';}
   }else{result.fallbackMode='no-manual-control';}
   return result;
 }
 
-// ═══════════════════════════════════════════════════════════
-// KALIBRIERUNG
-// ═══════════════════════════════════════════════════════════
-// v2.6: Kalibrierung persistiert in localStorage und überlebt Stop/Neustart.
-// (v2.5 hat customCalibFactor bei jedem stopCamera() genullt – die Messung
-// gegen das Referenz-PAR-Meter war nach jedem Stop verloren.)
 function loadCalibFactor(){
-  try{
-    // v3.0: kameraspezifischer Schlüssel – Front (Diffusor) und Rückkamera
-    // haben komplett unterschiedliche Optik/Transmission.
-    const v=parseFloat(localStorage.getItem(CALIB_KEY+'_'+cameraFacing));
-    return Number.isFinite(v)&&v>0?v:null;
-  }catch(e){return null;} // z.B. localStorage blockiert
+  try{const v=parseFloat(localStorage.getItem(CALIB_KEY+'_'+cameraFacing));return Number.isFinite(v)&&v>0?v:null;}catch(e){return null;}
 }
-function updateCalibDisplay(){
-  document.getElementById('activeCalibVal').textContent=
-    customCalibFactor!==null?'×'+customCalibFactor.toFixed(4):'– (unkalibriert)';
-}
+function updateCalibDisplay(){document.getElementById('activeCalibVal').textContent=customCalibFactor!==null?'×'+customCalibFactor.toFixed(4):'– (unkalibriert)';}
 function openCalibModal(){
-  // v2.8: gleiche Präzisionslogik wie Hauptanzeige; bei schwachem Signal
-  // vor Kalibrierung warnen (Faktor = ref/raw wird bei raw≈0 unbrauchbar).
-  document.getElementById('currentRawVal').textContent=
-    currentRawPPFD<=0?'–––':(currentRawPPFD<10?currentRawPPFD.toFixed(1):Math.round(currentRawPPFD));
+  document.getElementById('currentRawVal').textContent=currentRawPPFDUncalibrated<=0?'–––':(currentRawPPFDUncalibrated<10?currentRawPPFDUncalibrated.toFixed(1):Math.round(currentRawPPFDUncalibrated));
   updateCalibDisplay();
   document.getElementById('calibModal').classList.add('open');
 }
 function closeCalibModal(){document.getElementById('calibModal').classList.remove('open');}
 function applyCalibration(){
   const refPPFD=parseFloat(document.getElementById('refPPFD').value);
-  if(!refPPFD||currentRawPPFD<=0){showError('Gültigen Referenzwert eingeben und Messung laufen lassen.');return;}
-  // v2.8: Kalibrierung bei schwachem Signal blockieren – ref/raw mit raw<5
-  // erzeugt einen Faktor, der fast nur Rauschen skaliert. Unter hellem,
-  // stabilem Licht kalibrieren (Rohwert deutlich über 5).
-  if(currentRawPPFD<5){showError('Rohwert zu niedrig zum Kalibrieren ('+currentRawPPFD.toFixed(1)+'). Unter hellem Licht kalibrieren.');return;}
-  customCalibFactor=Math.max(0.1,Math.min(10,refPPFD/currentRawPPFD));
+  if(!refPPFD||currentRawPPFDUncalibrated<=0){showError('Gültigen Referenzwert eingeben und Messung laufen lassen.');return;}
+  if(currentRawPPFDUncalibrated<5){showError('Rohwert zu niedrig zum Kalibrieren ('+currentRawPPFDUncalibrated.toFixed(1)+'). Unter hellem Licht kalibrieren.');return;}
+  customCalibFactor=Math.max(0.1,Math.min(10,refPPFD/currentRawPPFDUncalibrated));
   try{localStorage.setItem(CALIB_KEY+'_'+cameraFacing,customCalibFactor);}catch(e){}
   closeCalibModal();
 }
@@ -673,94 +479,50 @@ function resetCalibration(){
   updateCalibDisplay();
 }
 
-// ═══════════════════════════════════════════════════════════
-// PAR-BERECHNUNG
-// ═══════════════════════════════════════════════════════════
 function calculatePARFromLinear(r,g,b,id){
-  if(id==='LED_GROW')    return r*0.50+g*0.15+b*0.35;
-  if(id==='SODIUM_HPS')  return r*0.55+g*0.40+b*0.05;
+  if(id==='LED_GROW') return r*0.50+g*0.15+b*0.35;
+  if(id==='SODIUM_HPS') return r*0.55+g*0.40+b*0.05;
   return r*0.33+g*0.34+b*0.33;
 }
 
-// ═══════════════════════════════════════════════════════════
-// ADAPTIVES SUBSAMPLING – KALMAN-INNOVATION ALS GATE
-// ═══════════════════════════════════════════════════════════
 function updatePixelStep(currentStep,kalmanInnovation){
   const LIGHT_CHANGE_THRESHOLD=0.3,STABLE_THRESHOLD=0.8;
   const divisor=Math.abs(kalman.x)||1;
-  const normInnovation=kalmanInnovation/divisor;
+  const ni=kalmanInnovation/divisor;
   if(currentStep===4){
-    if(normInnovation<LIGHT_CHANGE_THRESHOLD){
-      stepTransitionAccum+=normInnovation;
-    }else{
-      stepTransitionAccum=0;return 4; // Lichtwechsel -> feines Raster behalten
-    }
+    if(ni<LIGHT_CHANGE_THRESHOLD){stepTransitionAccum+=ni;}else{stepTransitionAccum=0;return 4;}
     if(stepTransitionAccum>STABLE_THRESHOLD){stepTransitionAccum=0;return 8;}
     return 4;
   }else{
-    if(normInnovation>LIGHT_CHANGE_THRESHOLD*2){stepTransitionAccum=0;return 4;}
-    if(normInnovation<LIGHT_CHANGE_THRESHOLD/2){
-      stepTransitionAccum+=normInnovation;
-      if(stepTransitionAccum>STABLE_THRESHOLD*2){stepTransitionAccum=0;return 4;}
-    }
+    if(ni>LIGHT_CHANGE_THRESHOLD*2){stepTransitionAccum=0;return 4;}
+    if(ni<LIGHT_CHANGE_THRESHOLD/2){stepTransitionAccum+=ni;if(stepTransitionAccum>STABLE_THRESHOLD*2){stepTransitionAccum=0;return 4;}}
     return 8;
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// KAMERA START / STOP
-// ═══════════════════════════════════════════════════════════
-// v3.0: Umschalter Front/Rück (Präferenz oben bei den Globals deklariert)
-function updateCameraToggleLabel(){
-  document.getElementById('cameraToggle').textContent=
-    cameraFacing==='user'?'📷 Front (Diffusor)':'📷 Rückkamera';
-}
+function updateCameraToggleLabel(){document.getElementById('cameraToggle').textContent=cameraFacing==='user'?'📷 Front (Diffusor)':'📷 Rückkamera';}
 async function toggleCamera(){
   cameraFacing=cameraFacing==='user'?'environment':'user';
   try{localStorage.setItem('ppfd_camera',cameraFacing);}catch(e){}
   updateCameraToggleLabel();
-  // Kalibrierung ist kameraspezifisch (Diffusor + andere Optik) -> neu laden
   customCalibFactor=loadCalibFactor();
-  if(isMeasuring){stopCamera();await startCamera();} // nahtloser Wechsel
-}
-
-// v3.1: Screen Wake Lock – ohne ihn dunkelt das Display während einer längeren
-// Messung ab und der Lockscreen beendet sie (visibilitychange -> stopCamera).
-// Best-effort: API fehlt auf älteren Browsern, Messung läuft dann trotzdem.
-// Kein Re-Acquire bei visibilitychange nötig: Tab-Wechsel stoppt die Messung
-// ohnehin, und jeder Neustart fordert den Lock neu an.
-let wakeLock=null;
-async function requestWakeLock(){
-  try{wakeLock=await navigator.wakeLock?.request('screen');}
-  catch(e){console.warn('WakeLock nicht verfügbar:',e);}
-}
-function releaseWakeLock(){
-  try{wakeLock?.release();}catch(e){}
-  wakeLock=null;
+  if(isMeasuring){stopCamera();await startCamera();}
 }
 
 async function startCamera(){
   try{
-    activeStream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:cameraFacing},width:{ideal:320},height:{ideal:240}}
-    });
+    activeStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:cameraFacing},width:{ideal:320},height:{ideal:240}}});
     video.srcObject=activeStream;
-    // FIX (MDN-Referenzmuster): explizit abspielen und auf erste dekodierte
-    // Frames warten. Ohne das kann drawImage() dauerhaft Schwarz liefern
-    // (readyState<HAVE_CURRENT_DATA zeichnet nichts). Die Wartezeit erfüllt
-    // nebenbei crbug.com/711524: getCapabilities() liefert erst nach
-    // Stream-Start verlässliche Werte.
     try{await video.play();}catch(e){console.warn('video.play():',e);}
     await new Promise(res=>{
       if(video.readyState>=2) return res();
-      const t=setTimeout(res,3000); // Timeout-Fallback: nicht ewig blockieren
+      const t=setTimeout(res,3000);
       video.addEventListener('loadeddata',()=>{clearTimeout(t);res();},{once:true});
     });
     blackFrameStage=0;blackFrameCount=0;
     hardwareSettings=await applyHardwareConstraints(activeStream);
     const mode=hardwareSettings.constraintsApplied?'Manuell':(hardwareSettings.fallbackMode?'Software':'Auto');
-    document.getElementById('deviceInfo').textContent=
-      `Gerät: ${hardwareSettings.deviceLabel} · ${mode} · ${hardwareSettings.frameRate?.toFixed(0)||'?'} fps`;
+    document.getElementById('deviceInfo').textContent=`Gerät: ${hardwareSettings.deviceLabel} · ${mode} · ${hardwareSettings.frameRate?.toFixed(0)||'?'} fps`;
     document.getElementById('hardwareRow').style.display='flex';
     document.getElementById('hardwareVal').textContent=mode;
     document.getElementById('clippingRow').style.display='flex';
@@ -768,15 +530,15 @@ async function startCamera(){
     document.getElementById('fpsRow').style.display='flex';
     document.getElementById('stepRow').style.display='flex';
     useSoftwareGain=!hardwareSettings.constraintsApplied;
+    wbManual=hardwareSettings.wbManual||false;
+    lightDetector.unlock();
     if(useSoftwareGain){
       document.getElementById('gainControl').classList.add('visible');
-      document.getElementById('gainSlider').value=1.0;          // v2.6: UI-Sync
-      document.getElementById('gainValue').textContent='1.00×'; //       mit reset()
+      document.getElementById('gainSlider').value=1.0;
+      document.getElementById('gainValue').textContent='1.00×';
     }
     kalman.r=hardwareSettings.constraintsApplied?2.5:8.0;
-    kalman.reset(); // v3.1: kein Altzustand aus vorheriger Messung/Kamera
     tempCompensator.reset();gainController.reset();appFSM.reset();
-    requestWakeLock(); // v3.1: Display während der Messung wachhalten
     frameCount=0;lastFrameTime=0;smoothedFps=hardwareSettings.frameRate||30;
     pixelStep=4;stepTransitionAccum=0;
     lastFlickerResult={isFlickering:false,modulation:"0.0",freq:"N/A"};
@@ -787,30 +549,27 @@ async function startCamera(){
     animationFrameId=requestAnimationFrame(processLoop);
   }catch(err){
     isMeasuring=false;setButtonState('idle');
-    document.getElementById('statusDot').className='status-dot error'; // v2.6: sauber setzen statt stapeln
-    if(err.name==='NotAllowedError')       showError('Kamera-Zugriff verweigert.');
-    else if(err.name==='NotFoundError')    showError('Keine Kamera gefunden.');
+    document.getElementById('statusDot').className='status-dot error';
+    if(err.name==='NotAllowedError') showError('Kamera-Zugriff verweigert.');
+    else if(err.name==='NotFoundError') showError('Keine Kamera gefunden.');
     else if(err.name==='NotReadableError') showError('Kamera wird bereits verwendet.');
-    else                                   showError('Kamera-Fehler: '+err.message);
+    else showError('Kamera-Fehler: '+err.message);
   }
 }
 
 function stopCamera(){
   isMeasuring=false;
-  releaseWakeLock(); // v3.1
-  blackFrameCount=0;blackFrameStage=0; // Watchdog-Reset für nächsten Start
+  blackFrameCount=0;blackFrameStage=0;
   if(animationFrameId){cancelAnimationFrame(animationFrameId);animationFrameId=null;}
   if(activeStream){activeStream.getTracks().forEach(t=>t.stop());activeStream=null;}
   if(video.srcObject) video.srcObject=null;
-  // v2.5 State-Reset
   lastFrameTime=0;smoothedFps=30;pixelStep=4;stepTransitionAccum=0;
   flickerReliable=true;lowFpsFrameCount=0;
   setButtonState('idle');
   document.getElementById('statusDot').className='status-dot';
   document.getElementById('warmupOverlay').classList.remove('active');
   document.getElementById('gainControl').classList.remove('visible');
-  ['hardwareRow','clippingRow','reliabilityRow','fpsRow','stepRow','debugExpRow'].forEach(id=>
-    document.getElementById(id).style.display='none');
+  ['hardwareRow','clippingRow','reliabilityRow','fpsRow','stepRow','debugExpRow'].forEach(id=>document.getElementById(id).style.display='none');
   document.getElementById('flickerWarning').style.display='none';
   document.getElementById('ppfdVal').textContent='–––';
   document.getElementById('luxVal').textContent='–';
@@ -819,21 +578,15 @@ function stopCamera(){
   document.getElementById('fpsVal').textContent='–';
   document.getElementById('stepVal').textContent='4×';
   document.getElementById('currentRawVal').textContent='–––';
-  // v3.1: AI-Parameter + DLI zeigten nach Stop die letzten Werte weiter an
-  document.getElementById('lightSourceVal').textContent='Unbekannt';
-  document.getElementById('spectralFactorVal').textContent='×1.00';
-  document.getElementById('flickerVal').textContent='OK';
-  document.getElementById('flickerVal').style.color='';
-  document.getElementById('dli12').textContent='–';
-  document.getElementById('dli18').textContent='–';
   document.getElementById('zoneBadge').textContent='Kamera starten';
   document.getElementById('zoneBadge').style.color='var(--muted)';
   document.getElementById('zoneBadge').style.borderColor='var(--muted)';
   document.getElementById('ppfdVal').style.color='var(--green)';
   document.getElementById('ppfdCard').style.setProperty('--glow-color','#4ade8022');
-  // v2.6: customCalibFactor bleibt erhalten (persistente Kalibrierung)
-  hardwareSettings=null;currentRawPPFD=0;frameCount=0;
+  hardwareSettings=null;currentRawPPFD=0;currentRawPPFDUncalibrated=0;frameCount=0;
   currentFactor=0.0185;currentLightSourceName='SUNLIGHT';lastAiUpdate=0;
+  lightDetector.unlock();
+  wbManual=false;
 }
 
 document.getElementById('gainSlider').addEventListener('input',e=>{
@@ -841,78 +594,45 @@ document.getElementById('gainSlider').addEventListener('input',e=>{
   document.getElementById('gainValue').textContent=parseFloat(e.target.value).toFixed(2)+'×';
 });
 
-// ═══════════════════════════════════════════════════════════
-// HAUPTSCHLEIFE – v2.5 VOLLSTÄNDIG
-// ═══════════════════════════════════════════════════════════
-// Schwarzbild-Selbstheilung: Manuell-Constraints verwerfen und auf
-// kontinuierliche Automatik zurückschalten. Deckt ALLE Ursachen ab, bei
-// denen der Manuell-Modus (aus welchem Treiber-Grund auch immer) ein
-// unbrauchbares Bild liefert – robuster als jede Einzelfall-Diagnose.
 async function revertToAutoExposure(){
   try{
     const track=activeStream?.getVideoTracks()[0];
     if(track) await track.applyConstraints({advanced:[{exposureMode:'continuous',whiteBalanceMode:'continuous'}]});
   }catch(e){console.warn('Auto-Revert fehlgeschlagen:',e);}
-  if(hardwareSettings){
-    hardwareSettings.constraintsApplied=false;
-    hardwareSettings.fallbackMode='black-frame-revert';
-  }
+  if(hardwareSettings){hardwareSettings.constraintsApplied=false;hardwareSettings.fallbackMode='black-frame-revert';}
   useSoftwareGain=true;
   document.getElementById('gainControl').classList.add('visible');
   document.getElementById('hardwareVal').textContent='Auto (Fallback)';
-  kalman.r=8.0; // Software-Modus = mehr Messrauschen; Kalman-x konvergiert von 0 selbst
-  tempCompensator.reset(); // Warmup neu, da Belichtung sich gerade komplett ändert
+  kalman.r=8.0;
+  tempCompensator.reset();
+  wbManual=false;
+  lightDetector.unlock();
 }
 
 function processLoop(timestamp){
   if(!isMeasuring) return;
   if(!activeStream||!video.srcObject){stopCamera();return;}
-  // FIX: Ohne dekodierte Frames (readyState<2) zeichnet drawImage nichts und
-  // alle Pixel wären 0 -> statt Nullen zu verrechnen, Frame überspringen.
-  if(video.readyState<2){
-    animationFrameId=requestAnimationFrame(processLoop);
-    return;
-  }
+  if(video.readyState<2){animationFrameId=requestAnimationFrame(processLoop);return;}
   frameCount++;
 
-  // 1. INTER-FRAME TIMING (v2.6 FIX: Clamp statt Skip)
-  // v2.5 hat Frames >100ms verworfen -> unter 10 fps sah die EMA nie ein
-  // Update, smoothedFps blieb beim Startwert und das Reliability-Gate griff
-  // genau dann nicht, wenn es gebraucht wurde. Clamp bei 250ms begrenzt
-  // stattdessen nur den Einfluss einzelner Ausreißer (Tab-Wechsel etc.).
   if(lastFrameTime>0){
     const deltaMs=Math.min(timestamp-lastFrameTime,250);
-    if(deltaMs>0){
-      const instantFps=1000/deltaMs;
-      smoothedFps=smoothedFps*0.85+instantFps*0.15; // EMA alpha=0.15
-    }
+    if(deltaMs>0){smoothedFps=smoothedFps*0.85+(1000/deltaMs)*0.15;}
   }
   lastFrameTime=timestamp;
-  // v2.6 FIX: Zwei getrennte Raten. nominalFps (Sensor) für die Rolling-
-  // Shutter-Frequenzschätzung – das Sensor-Readout hängt nicht an rAF.
-  // smoothedFps (echte rAF-Rate) für Anzeige, Gate und FSM: in v2.5 bekam
-  // die FSM die nominelle Rate (immer ≥30 wegen ||30-Default), wodurch der
-  // LOW_PERF-Zustand nie erreichbar war und die FPS-Anzeige konstant blieb.
   const nominalFps=hardwareSettings?.frameRate||smoothedFps;
 
-  // 2. FLICKER-RELIABILITY-GATE (Hysterese-Akkumulator)
-  if(smoothedFps<FPS_THRESHOLD_LOW){
-    lowFpsFrameCount=Math.min(lowFpsFrameCount+1,FPS_CONFIRM_FRAMES);
-  }else if(smoothedFps>FPS_THRESHOLD_HIGH){
-    lowFpsFrameCount=Math.max(lowFpsFrameCount-1,0);
-  }
+  if(smoothedFps<FPS_THRESHOLD_LOW){lowFpsFrameCount=Math.min(lowFpsFrameCount+1,FPS_CONFIRM_FRAMES);}
+  else if(smoothedFps>FPS_THRESHOLD_HIGH){lowFpsFrameCount=Math.max(lowFpsFrameCount-1,0);}
   flickerReliable=lowFpsFrameCount<FPS_CONFIRM_FRAMES;
 
-  // 3. FPS + STEP ANZEIGE (alle 30 Frames)
   if(frameCount%30===0){
-    document.getElementById('fpsVal').textContent=smoothedFps.toFixed(1)+' fps'; // v2.6: echte Rate
+    document.getElementById('fpsVal').textContent=smoothedFps.toFixed(1)+' fps';
     document.getElementById('stepVal').textContent=pixelStep+'×';
   }
 
-  // 4. ADAPTIVES SUBSAMPLING
   pixelStep=updatePixelStep(pixelStep,kalman.innovation);
 
-  // 5. PIXEL-ANALYSE MIT O(1) LUT
   ctx.drawImage(video,0,0,320,240);
   const imageData=ctx.getImageData(0,0,320,240);
   const data=imageData.data;
@@ -932,11 +652,7 @@ function processLoop(timestamp){
     sumY_lin+=yLin;
     sumR_gamma+=rg;sumG_gamma+=gg;sumB_gamma+=bg;
     sumY_gamma+=0.299*rg+0.587*gg+0.114*bg;
-    // rowAverages nur bei Step=4; Step=8 zu dünn für Flicker-Detection
-    if(pixelStep===4){
-      const row=(i>>2)/320|0;
-      rowSums_lin[row]+=yLin;
-    }
+    if(pixelStep===4){const row=(i>>2)/320|0;rowSums_lin[row]+=yLin;}
     sampledPixels++;
   }
 
@@ -945,64 +661,34 @@ function processLoop(timestamp){
   const avgR_gamma=sumR_gamma/sampledPixels,avgG_gamma=sumG_gamma/sampledPixels,avgB_gamma=sumB_gamma/sampledPixels;
   const yMean_gamma=sumY_gamma/sampledPixels;
 
-  // SCHWARZBILD-WATCHDOG: yMean exakt 0 über ~19k Samples heißt "keine echten
-  // Bilddaten" – reale Sensoren rauschen selbst im Dunkeln (Werte 1–5).
-  // Stage 0: Nach ~3s Schwarzbild im Manuell-Modus -> Auto-Fallback (Selbst-
-  // heilung). Stage 1: Bleibt es auch mit Automatik schwarz -> echter Fehler.
   if(yMean_gamma===0){
     blackFrameCount++;
     if(blackFrameCount>=90){
-      if(blackFrameStage===0&&hardwareSettings?.constraintsApplied){
-        blackFrameStage=1;blackFrameCount=0;
-        revertToAutoExposure();
-        showError('Sensor lieferte Schwarzbild im Manuell-Modus – automatisch auf Auto-Belichtung umgeschaltet.');
-      }else if(blackFrameStage<2){
-        blackFrameStage=2;
-        showError('Keine Bilddaten vom Sensor (dauerhaft Schwarzbild). Kamera neu starten oder anderes Gerät testen.');
-      }
+      if(blackFrameStage===0&&hardwareSettings?.constraintsApplied){blackFrameStage=1;blackFrameCount=0;revertToAutoExposure();showError('Sensor lieferte Schwarzbild im Manuell-Modus – automatisch auf Auto-Belichtung umgeschaltet.');}
+      else if(blackFrameStage<2){blackFrameStage=2;showError('Keine Bilddaten vom Sensor (dauerhaft Schwarzbild). Kamera neu starten oder anderes Gerät testen.');}
     }
-  }else{
-    blackFrameCount=0;
-  }
+  }else{blackFrameCount=0;}
 
   const rowAverages=new Float64Array(240);
-  if(pixelStep===4){
-    // v2.6 FIX: pro Zeile werden 320/pixelStep=80 Pixel gesampelt, nicht 320.
-    // (Für Modulation/Zero-Crossings skalierungsneutral, aber jetzt stimmt der Name.)
-    const samplesPerRow=320/pixelStep;
-    for(let i=0;i<240;i++) rowAverages[i]=rowSums_lin[i]/samplesPerRow;
-  }else{
-    rowAverages.fill(yMean_lin); // Flat -> 0% Modulation -> kein False-Positive
-  }
+  if(pixelStep===4){const samplesPerRow=320/pixelStep;for(let i=0;i<240;i++) rowAverages[i]=rowSums_lin[i]/samplesPerRow;}else{rowAverages.fill(yMean_lin);}
 
-  // 6. CLIPPING (v2.6 FIX: Ratio direkt auf gesampelte Pixel beziehen)
-  // v2.5 rechnete clippingPixels*step/4 gegen 320*240 -> Ratio um Faktor 4
-  // unterschätzt, "Kritisch" triggerte erst bei ~60% statt 15% Clipping.
   const clipStatus=clippingDetector.analyze(clippingPixels,sampledPixels);
   document.getElementById('clippingVal').textContent=clipStatus.message;
   document.getElementById('clippingVal').style.color=clipStatus.color;
   document.getElementById('reliabilityVal').textContent=(clipStatus.reliability*100).toFixed(0)+'%';
   document.getElementById('reliabilityVal').style.color=clipStatus.color;
 
-  // 7. TEMPERATUR-KOMPENSATION
   const tempStatus=tempCompensator.update();
   if(!tempStatus.isWarmedUp){
     document.getElementById('warmupOverlay').classList.add('active');
     document.getElementById('warmupFill').style.width=tempStatus.progress+'%';
     document.getElementById('warmupText').textContent=Math.round(tempStatus.progress)+'%';
     document.getElementById('statusDot').className='status-dot warmup';
-  }else{
-    document.getElementById('warmupOverlay').classList.remove('active');
-  }
+  }else{document.getElementById('warmupOverlay').classList.remove('active');}
 
-  // 8. SOFTWARE-GAIN
   let gainMultiplier=1.0;
-  if(useSoftwareGain){
-    gainMultiplier=gainController.update(yMean_gamma,timestamp);
-    document.getElementById('gainValue').textContent=gainMultiplier.toFixed(2)+'×';
-  }
+  if(useSoftwareGain){gainMultiplier=gainController.update(yMean_gamma,timestamp);document.getElementById('gainValue').textContent=gainMultiplier.toFixed(2)+'×';}
 
-  // 9. AI-KLASSIFIKATION + FLICKER (1 Hz gedrosselt)
   if(timestamp-lastAiUpdate>1000){
     const lightResult=lightDetector.detect(avgR_gamma,avgG_gamma,avgB_gamma);
     currentFactor=lightResult.factor;currentLightSourceName=lightResult.id;
@@ -1010,71 +696,38 @@ function processLoop(timestamp){
     document.getElementById('spectralFactorVal').textContent='×'+currentFactor.toFixed(4);
     document.getElementById('confVal').textContent=(lightResult.conf*100).toFixed(0)+'%';
 
+    if(tempStatus.isWarmedUp && !wbManual && !lightDetector.locked){lightDetector.lock();}
+
     const fe=document.getElementById('flickerWarning');
     const fv=document.getElementById('flickerVal');
-    if(!flickerReliable){
-      // CPU-Limit: Flicker-Detection pausiert
-      fv.textContent='CPU-Limit';fv.style.color='var(--muted)';
-      fe.style.display='none';
-      lastFlickerResult.isFlickering=false;
-    }else if(yMean_lin<2){
-      // v2.8 FIX: Mindest-Signal-Gate. Bei sehr dunklen Szenen dominieren
-      // Rauschanteile die Zeilenmittelwerte, und (max-min)/(max+min) geht
-      // gegen 100% – beobachtet als "FLICKER: 100.0% (~32 Hz)" bei Y-Mean 7
-      // (Rauschen, kein PWM; echte LED-PWM liegt zudem meist ≥100 Hz).
-      fv.textContent='Zu dunkel';fv.style.color='var(--muted)';
-      fe.style.display='none';
-      lastFlickerResult.isFlickering=false;
-    }else if(pixelStep!==4){
-      // v2.6 FIX: Bei Step 8× wird gar nicht gemessen (rowAverages flat) –
-      // v2.5 zeigte trotzdem "Stabil". Jetzt ehrlich als pausiert markiert.
-      fv.textContent='Pausiert (8×)';fv.style.color='var(--muted)';
-      fe.style.display='none';
-      lastFlickerResult.isFlickering=false;
-    }else{
+    if(!flickerReliable){fv.textContent='CPU-Limit';fv.style.color='var(--muted)';fe.style.display='none';lastFlickerResult.isFlickering=false;}
+    else if(yMean_gamma<20){fv.textContent='Zu dunkel';fv.style.color='var(--muted)';fe.style.display='none';lastFlickerResult.isFlickering=false;}
+    else if(pixelStep!==4){fv.textContent='Pausiert (8×)';fv.style.color='var(--muted)';fe.style.display='none';lastFlickerResult.isFlickering=false;}
+    else{
       lastFlickerResult=flickerDetector.detect(rowAverages,nominalFps);
-      if(lastFlickerResult.isFlickering){
-        fe.style.display='block';
-        fe.textContent=`⚠️ FLICKER: ${lastFlickerResult.modulation}% Modulation (${lastFlickerResult.freq})`;
-        fv.textContent='WARNUNG';fv.style.color='var(--amber)';
-      }else{
-        fe.style.display='none';
-        fv.textContent='Stabil';fv.style.color='var(--green)';
-      }
+      if(lastFlickerResult.isFlickering){fe.style.display='block';fe.textContent=`⚠️ FLICKER: ${lastFlickerResult.modulation}% Modulation (${lastFlickerResult.freq})`;fv.textContent='WARNUNG';fv.style.color='var(--amber)';}
+      else{fe.style.display='none';fv.textContent='Stabil';fv.style.color='var(--green)';}
     }
     lastAiUpdate=timestamp;
   }
 
-  // 10. PHYSIKALISCHE BERECHNUNG
-  const effectiveISO=(hardwareSettings?.iso||ISO)*gainMultiplier;
+  const effectiveISO=hardwareSettings?.iso||ISO;
   const calibConstant=getDynamicCalibrationConstant(hardwareSettings?.iso||ISO,hardwareSettings?.exposureTime||EXPOSURE_TIME);
   const hSensor_lux=(yMean_lin*APERTURE_SQ)/(effectiveISO*(hardwareSettings?.exposureTime||EXPOSURE_TIME));
-  const lux=hSensor_lux*calibConstant;
+  const lux=hSensor_lux*calibConstant*gainMultiplier;
   const parVal=calculatePARFromLinear(avgR_lin,avgG_lin,avgB_lin,currentLightSourceName);
   const hSensor_par=(parVal*APERTURE_SQ)/(effectiveISO*(hardwareSettings?.exposureTime||EXPOSURE_TIME));
-  let rawPPFD=hSensor_par*calibConstant*currentFactor;
+  let rawPPFD=hSensor_par*calibConstant*currentFactor*gainMultiplier;
   rawPPFD*=tempStatus.factor;
+  currentRawPPFDUncalibrated=rawPPFD;
   if(customCalibFactor!==null) rawPPFD*=customCalibFactor;
   currentRawPPFD=rawPPFD;
   const displayPPFD=tempStatus.isWarmedUp?kalman.update(rawPPFD):0;
 
-  // 11. FSM – ZUSTANDSMASCHINE
   const isClipping=(clipStatus.level==='critical');
-  const state=appFSM.update(tempStatus.isWarmedUp,lastFlickerResult.isFlickering,isClipping,smoothedFps); // v2.6: echte Rate
+  const state=appFSM.update(tempStatus.isWarmedUp,lastFlickerResult.isFlickering,isClipping,smoothedFps);
 
-  // 12. UI-RENDERING via FSM-State
-  // v2.8: Unter 10 µmol eine Nachkommastelle zeigen – 0.5 µmol (dunkler Raum)
-  // erschien vorher als stumme "0" und sah wie ein Defekt aus, war aber Physik.
-  document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp
-    ?(displayPPFD<10?displayPPFD.toFixed(1):Math.round(displayPPFD))
-    :'–––';
-  // v3.1: DLI-Hochrechnung. 1 µmol·m⁻²·s⁻¹ über 1 h = 0.0036 mol·m⁻²
-  // -> DLI = PPFD × 0.0036 × Photoperiode(h). 12h/18h decken die üblichen
-  // Blüte-/Wachstumszyklen ab. Nur gedrosselt updaten (ruhigere Anzeige).
-  if(tempStatus.isWarmedUp&&frameCount%30===0){
-    document.getElementById('dli12').textContent=(displayPPFD*0.0036*12).toFixed(1);
-    document.getElementById('dli18').textContent=(displayPPFD*0.0036*18).toFixed(1);
-  }
+  document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp?(isClipping?'———':(displayPPFD<10?displayPPFD.toFixed(1):Math.round(displayPPFD))):'–––';
   document.getElementById('luxVal').textContent=Math.round(lux);
   document.getElementById('yMeanVal').textContent=yMean_gamma.toFixed(1);
 
@@ -1106,26 +759,19 @@ function processLoop(timestamp){
 }
 
 function getPPFDZone(v){
-  if(v<50)   return{label:'Sehr niedrig',     color:'#6b8f6e'};
-  if(v<200)  return{label:'Niedrig',           color:'#60a5fa'};
-  if(v<400)  return{label:'Optimal Keimling', color:'#34d399'};
-  if(v<700)  return{label:'Optimal Wachstum', color:'#4ade80'};
-  if(v<1000) return{label:'Optimal Bluete',   color:'#fbbf24'};
-  if(v<1500) return{label:'Hoch',             color:'#f97316'};
-  return          {label:'Sehr hoch',         color:'#f87171'};
+  if(v<50) return{label:'Sehr niedrig',color:'#6b8f6e'};
+  if(v<200) return{label:'Niedrig',color:'#60a5fa'};
+  if(v<400) return{label:'Optimal Keimling',color:'#34d399'};
+  if(v<700) return{label:'Optimal Wachstum',color:'#4ade80'};
+  if(v<1000) return{label:'Optimal Bluete',color:'#fbbf24'};
+  if(v<1500) return{label:'Hoch',color:'#f97316'};
+  return{label:'Sehr hoch',color:'#f87171'};
 }
 
-// ═══════════════════════════════════════════════════════════
-// EVENT LISTENERS
-// ═══════════════════════════════════════════════════════════
-document.addEventListener('visibilitychange',()=>{
-  if(document.hidden&&isMeasuring){stopCamera();showError('Messung pausiert (Tab im Hintergrund)');}
-});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&isMeasuring){stopCamera();showError('Messung pausiert (Tab im Hintergrund)');}});
 window.addEventListener('beforeunload',()=>{if(isMeasuring) stopCamera();});
-document.getElementById('deviceInfo').textContent='Gerät: '+
-  (navigator.userAgent.includes('iPhone')?'iPhone (Software-Gain erwartet)':
-   navigator.userAgent.includes('Android')?'Android (Hardware-Lock möglich)':'Unbekannt');
-updateCameraToggleLabel(); // v3.0: gespeicherte Kamera-Wahl anzeigen
+document.getElementById('deviceInfo').textContent='Gerät: '+(navigator.userAgent.includes('iPhone')?'iPhone (Software-Gain erwartet)':navigator.userAgent.includes('Android')?'Android (Hardware-Lock möglich)':'Unbekannt');
+updateCameraToggleLabel();
 </script>
 </body>
-</html>
+  </html>
