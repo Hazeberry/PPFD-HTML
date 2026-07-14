@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>PPFD Meter Pro v3.1.4</title>
+<title>PPFD Meter Pro v3.2.1</title>
 <style>
   :root{--bg:#0d1f10;--surface:#152118;--border:#2a3d2c;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;--blue:#60a5fa;--purple:#c084fc;--mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;--sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif}
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -14,6 +14,7 @@
   .status-dot.active{background:var(--green);box-shadow:0 0 8px var(--green)}
   .status-dot.flicker{background:var(--amber);box-shadow:0 0 8px var(--amber)}
   .status-dot.error{background:var(--red);box-shadow:0 0 8px var(--red)}
+  .status-dot.clipping{background:var(--red);box-shadow:0 0 8px var(--red)}
   .status-dot.warmup{background:var(--purple);box-shadow:0 0 8px var(--purple)}
   .status-dot.low_perf{background:var(--muted);box-shadow:none}
   main{width:100%;max-width:420px;flex:1;display:flex;flex-direction:column;gap:14px;padding-top:20px}
@@ -72,7 +73,7 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v3.1.4</span>
+  <span class="app-title">PPFD Meter Pro v3.2.1</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
@@ -126,8 +127,25 @@
 
   <button class="calib-btn" onclick="openCalibModal()">🔧 Kalibrierung</button>
 
+  <div class="params-card" id="trainCard">
+    <div class="section-label">Trainingsdaten (Referenzmessung)</div>
+    <div class="calib-input-group" style="margin-bottom:10px">
+      <label>Referenz-PPFD vom PAR-Meter (µmol·m⁻²·s⁻¹)</label>
+      <input type="number" id="trainRefPPFD" placeholder="z.B. 450" step="1">
+    </div>
+    <div class="calib-input-group" style="margin-bottom:10px">
+      <label>Notiz (optional)</label>
+      <input type="text" id="trainNote" placeholder="z.B. mit Diffusor, bewölkt">
+    </div>
+    <button class="calib-btn" style="border-color:var(--green);color:var(--green);margin-top:0" onclick="saveTrainPoint()">💾 Datenpunkt speichern (<span id="trainCount">0</span>)</button>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="calib-btn" style="flex:1;margin-top:0" onclick="exportTrainCSV()">⬇ CSV exportieren</button>
+      <button class="calib-btn" style="flex:1;margin-top:0;border-color:var(--red);color:var(--red)" onclick="clearTrainData()">🗑 Löschen</button>
+    </div>
+  </div>
+
   <div class="calib-note">
-    v3.1.4 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
+    v3.2.1 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung · WB-Lock · Zielband-Fallback<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
   </div>
@@ -319,6 +337,10 @@ let lastAiUpdate=0,hardwareSettings=null,useSoftwareGain=false;
 let wbManual=false;
 let customCalibFactor=null,activeStream=null,currentRawPPFD=0,currentRawPPFDUncalibrated=0,frameCount=0,animationFrameId=null;
 let blackFrameCount=0,blackFrameStage=0;
+let lastFrameSnapshot=null;
+const TRAINDATA_KEY='ppfd_traindata_v1';
+let exposureDriftStrikes=0,lastExposureCheckFrame=0,exposureLockBaseline=null;
+const EXPOSURE_CHECK_INTERVAL=60,EXPOSURE_DRIFT_THRESHOLD=0.15,EXPOSURE_DRIFT_STRIKES_LIMIT=3;
 const CALIB_KEY='ppfd_calibFactor';
 let cameraFacing=(()=>{try{return localStorage.getItem('ppfd_camera')||'user';}catch(e){return 'user';}})();
 customCalibFactor=loadCalibFactor();
@@ -463,24 +485,38 @@ async function applyHardwareConstraints(stream){
       result.exposureTime=rawExpSec;
       result.frameRate=ns.frameRate||result.frameRate;
       
-      // PATCH C (v3.1.3, korrigiert #2): modeConfirmed darf NUR greifen, wenn
-      // oben tatsächlich exposureMode:'manual' angefordert wurde (Zweig
-      // Zeile 418). Lief die Funktion stattdessen durch den "else"-Zweig
-      // (Zeile 445, z.B. weil cap.exposureMode gar kein 'manual' anbietet,
-      // aber ISO/WB manuell verfügbar sind), wurde exposureMode nie berührt -
-      // ns.exposureMode wird dann zwangsläufig 'continuous' o.ä. melden,
-      // ohne dass das ein Fehlschlag ist. Ohne dieses Gate fiel die App auf
-      // A17 im Feldtest IMMER auf Software-Gain zurück, selbst wenn ISO-
-      // Manual-Lock erfolgreich griff - ein Regressionsbug ggü. v3.0, das
-      // diesen Check gar nicht kannte.
+      // PATCH C (v3.1.6, GLM5.2-Vorschlag): ns.exposureMode ist auf dem A17
+      // unzuverlässig (meldet 'continuous' auch bei nachweislich korrekt
+      // gesperrter Belichtung). Statt den String zu ignorieren (v3.1.5) oder
+      // ihm blind zu vertrauen (Bug #5), prüfen wir den TATSÄCHLICH
+      // zurückgemeldeten exposureTime-Wert gegen den zuletzt angeforderten
+      // (constraints.exposureTime wurde oben auf tuned.req gesetzt).
+      // Bewiesen an zwei realen Messungen auf dem A17:
+      //   - req=40, ns.exposureTime=99.98 → klarer Mismatch (>2 Einheiten)
+      //     = echter Hinweis, dass der Sensor NICHT hält, was wir angefragt
+      //     haben (Auto-Modus regelt intern nach) → korrekt Software.
+      //   - req=10, ns.exposureTime=10 → exakter Treffer = starker Beleg für
+      //     echten Manual-Lock, unabhängig davon was exposureMode meldet.
+      // In echtem Auto-Modus hinge ns.exposureTime von der Szenenhelligkeit
+      // ab, nicht von unserem zuletzt gesetzten Request - ein exakter Treffer
+      // ist daher kein Zufall.
       const attemptedManualExposure=(constraints.exposureMode==='manual');
-      const modeConfirmed=!attemptedManualExposure || !ns.exposureMode || ns.exposureMode==='manual';
+      const expMatch=attemptedManualExposure && ns.exposureTime!==undefined && ns.exposureTime!==null &&
+        constraints.exposureTime!==undefined &&
+        Math.abs(ns.exposureTime-constraints.exposureTime)<=2;
+      const modeConfirmed=!attemptedManualExposure || !ns.exposureMode ||
+        ns.exposureMode==='manual' || expMatch;
       
       if(!modeConfirmed){
-        console.warn('[PPFD] exposureMode nicht bestätigt:',ns.exposureMode,'- Gerät bleibt vermutlich im Auto-Modus.');
+        console.warn('[PPFD] Weder exposureMode noch exposureTime bestätigen Manual-Lock: mode=',ns.exposureMode,'angefragt=',constraints.exposureTime,'live=',ns.exposureTime);
         result.fallbackMode='exposure-mode-unconfirmed';
         return result;
       }
+      // Zusätzliche Absicherung (v3.1.5, bleibt bestehen): auch nach
+      // bestätigtem Start-Lock wird in processLoop periodisch nachgeprüft,
+      // ob ns.exposureTime im Zeitverlauf stabil bleibt - falls der Sensor
+      // NACH diesem Zeitpunkt doch noch nachregelt, fängt der Live-Drift-
+      // Wächter das ab (siehe EXPOSURE_CHECK_INTERVAL weiter unten).
       result.constraintsApplied=true;
     }catch(e){console.warn('HW-Constraints fehlgeschlagen:',e);result.fallbackMode='software-lock';}
   }else{result.fallbackMode='no-manual-control';}
@@ -499,7 +535,7 @@ function openCalibModal(){
 function closeCalibModal(){document.getElementById('calibModal').classList.remove('open');}
 function applyCalibration(){
   const refPPFD=parseFloat(document.getElementById('refPPFD').value);
-  if(!refPPFD||currentRawPPFDUncalibrated<=0){showError('Gültigen Referenzwert eingeben und Messung laufen lassen.');return;}
+  if(!Number.isFinite(refPPFD)||refPPFD<=0||currentRawPPFDUncalibrated<=0){showError('Gültigen Referenzwert (>0) eingeben und Messung laufen lassen.');return;}
   if(currentRawPPFDUncalibrated<5){showError('Rohwert zu niedrig zum Kalibrieren ('+currentRawPPFDUncalibrated.toFixed(1)+'). Unter hellem Licht kalibrieren.');return;}
   customCalibFactor=Math.max(0.1,Math.min(10,refPPFD/currentRawPPFDUncalibrated));
   try{localStorage.setItem(CALIB_KEY+'_'+cameraFacing,customCalibFactor);}catch(e){}
@@ -509,6 +545,67 @@ function resetCalibration(){
   customCalibFactor=null;
   try{localStorage.removeItem(CALIB_KEY+'_'+cameraFacing);}catch(e){}
   updateCalibDisplay();
+}
+
+// ===== v3.2: Trainingsdaten-Sammlung =====
+function loadTrainData(){
+  try{const d=JSON.parse(localStorage.getItem(TRAINDATA_KEY));return Array.isArray(d)?d:[];}catch(e){return [];}
+}
+function updateTrainCount(){
+  document.getElementById('trainCount').textContent=loadTrainData().length;
+}
+function saveTrainPoint(){
+  if(!isMeasuring||!lastFrameSnapshot){showError('Erst Messung starten – Datenpunkt braucht einen Live-Frame.');return;}
+  const ref=parseFloat(document.getElementById('trainRefPPFD').value);
+  if(!Number.isFinite(ref)||ref<0){showError('Gültigen Referenz-PPFD vom PAR-Meter eingeben.');return;}
+  if(lastFrameSnapshot.clipLevel==='critical'){showError('Frame ist übersteuert – als Trainingsdatenpunkt unbrauchbar.');return;}
+  const point={
+    timestamp:new Date().toISOString(),
+    referenzPPFD:ref,
+    notiz:(document.getElementById('trainNote').value||'').replace(/[,\n\r]/g,';'),
+    kamera:cameraFacing,
+    ...lastFrameSnapshot
+  };
+  const data=loadTrainData();
+  data.push(point);
+  try{localStorage.setItem(TRAINDATA_KEY,JSON.stringify(data));}catch(e){showError('Speichern fehlgeschlagen (localStorage voll?): '+e.message);return;}
+  updateTrainCount();
+  showError('Datenpunkt #'+data.length+' gespeichert ✓');
+}
+function exportTrainCSV(){
+  const data=loadTrainData();
+  if(data.length===0){showError('Keine Datenpunkte vorhanden.');return;}
+  const cols=['timestamp','referenzPPFD','notiz','kamera','avgR_gamma','avgG_gamma','avgB_gamma','avgR_lin','avgG_lin','avgB_lin','yMean_gamma','yMean_lin','exposureTime','iso','gainMultiplier','hardwareMode','fallbackMode','rawPPFDUncalibrated','lichtquelle','clipLevel'];
+  const rows=[cols.join(',')];
+  // v3.2.1 FIX (Opus-Review, CSV-Injektion): String-Felder, die mit = + - @
+  // oder Tab beginnen, würden in Excel/Sheets als Formel ausgeführt
+  // (z.B. =HYPERLINK(...)). Solche Felder bekommen ein '-Präfix und werden
+  // gequotet ("" für eingebettete Anführungszeichen).
+  const csvField=(v)=>{
+    if(v===undefined||v===null) return '';
+    if(typeof v==='number') return Number.isInteger(v)?String(v):v.toPrecision(8);
+    let s=String(v);
+    if(/^[=+\-@\t]/.test(s)) s="'"+s;
+    if(/[",\n\r]/.test(s)) s='"'+s.replace(/"/g,'""')+'"';
+    return s;
+  };
+  for(const p of data){
+    rows.push(cols.map(c=>csvField(p[c])).join(','));
+  }
+  const blob=new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='ppfd_traindata_'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')+'.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),5000);
+}
+function clearTrainData(){
+  const n=loadTrainData().length;
+  if(n===0){showError('Nichts zu löschen.');return;}
+  if(!confirm(n+' Datenpunkte unwiderruflich löschen? Vorher CSV exportieren!')) return;
+  try{localStorage.removeItem(TRAINDATA_KEY);}catch(e){}
+  updateTrainCount();
 }
 
 function calculatePARFromLinear(r,g,b,id){
@@ -542,6 +639,12 @@ async function toggleCamera(){
 }
 
 async function startCamera(){
+  // v3.2.1 FIX (Opus-Review B): Doppelstart-Guard. Während des await auf
+  // getUserMedia (Permission-Prompt!) blieb der Button klickbar - zwei Klicks
+  // erzeugten zwei Streams, der erste leakte (Kamera-LED dauerhaft an).
+  if(isMeasuring||activeStream) return;
+  const startBtnEl=document.getElementById('startBtn');
+  startBtnEl.disabled=true;startBtnEl.textContent='Starte...';
   try{
     activeStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:cameraFacing},width:{ideal:320},height:{ideal:240}}});
     video.srcObject=activeStream;
@@ -551,7 +654,7 @@ async function startCamera(){
       const t=setTimeout(res,3000);
       video.addEventListener('loadeddata',()=>{clearTimeout(t);res();},{once:true});
     });
-    blackFrameStage=0;blackFrameCount=0;
+    blackFrameStage=0;blackFrameCount=0;exposureDriftStrikes=0;lastExposureCheckFrame=0;exposureLockBaseline=null;
     hardwareSettings=await applyHardwareConstraints(activeStream);
     const mode=hardwareSettings.constraintsApplied?'Manuell':(hardwareSettings.fallbackMode?'Software':'Auto');
     const modeSuffix=hardwareSettings.fallbackMode?` (${hardwareSettings.fallbackMode})`:'';
@@ -581,6 +684,12 @@ async function startCamera(){
     isMeasuring=true;
     animationFrameId=requestAnimationFrame(processLoop);
   }catch(err){
+    // v3.2.1 FIX (Opus-Review A): Wirft irgendein await NACH erfolgreichem
+    // getUserMedia (z.B. getCapabilities auf undefined-Track), blieb der
+    // Stream aktiv - Kamera-LED an, UI zeigt "idle". Stream hier immer
+    // sauber stoppen.
+    if(activeStream){try{activeStream.getTracks().forEach(t=>t.stop());}catch(e2){}activeStream=null;}
+    if(video.srcObject) video.srcObject=null;
     isMeasuring=false;setButtonState('idle');
     document.getElementById('statusDot').className='status-dot error';
     if(err.name==='NotAllowedError') showError('Kamera-Zugriff verweigert.');
@@ -592,7 +701,7 @@ async function startCamera(){
 
 function stopCamera(){
   isMeasuring=false;
-  blackFrameCount=0;blackFrameStage=0;
+  blackFrameCount=0;blackFrameStage=0;exposureDriftStrikes=0;lastExposureCheckFrame=0;exposureLockBaseline=null;
   if(animationFrameId){cancelAnimationFrame(animationFrameId);animationFrameId=null;}
   if(activeStream){activeStream.getTracks().forEach(t=>t.stop());activeStream=null;}
   if(video.srcObject) video.srcObject=null;
@@ -627,15 +736,15 @@ document.getElementById('gainSlider').addEventListener('input',e=>{
   document.getElementById('gainValue').textContent=parseFloat(e.target.value).toFixed(2)+'×';
 });
 
-async function revertToAutoExposure(){
+async function revertToAutoExposure(reason){
   try{
     const track=activeStream?.getVideoTracks()[0];
     if(track) await track.applyConstraints({advanced:[{exposureMode:'continuous',whiteBalanceMode:'continuous'}]});
   }catch(e){console.warn('Auto-Revert fehlgeschlagen:',e);}
-  if(hardwareSettings){hardwareSettings.constraintsApplied=false;hardwareSettings.fallbackMode='black-frame-revert';}
+  if(hardwareSettings){hardwareSettings.constraintsApplied=false;hardwareSettings.fallbackMode=reason||'auto-revert';}
   useSoftwareGain=true;
   document.getElementById('gainControl').classList.add('visible');
-  document.getElementById('hardwareVal').textContent='Auto (Fallback)';
+  document.getElementById('hardwareVal').textContent='Auto (Fallback: '+(reason||'auto-revert')+')';
   kalman.r=8.0;
   tempCompensator.reset();
   wbManual=false;
@@ -697,10 +806,47 @@ function processLoop(timestamp){
   if(yMean_gamma===0){
     blackFrameCount++;
     if(blackFrameCount>=90){
-      if(blackFrameStage===0&&hardwareSettings?.constraintsApplied){blackFrameStage=1;blackFrameCount=0;revertToAutoExposure();showError('Sensor lieferte Schwarzbild im Manuell-Modus – automatisch auf Auto-Belichtung umgeschaltet.');}
+      if(blackFrameStage===0&&hardwareSettings?.constraintsApplied){blackFrameStage=1;blackFrameCount=0;revertToAutoExposure('black-frame');showError('Sensor lieferte Schwarzbild im Manuell-Modus – automatisch auf Auto-Belichtung umgeschaltet.');}
       else if(blackFrameStage<2){blackFrameStage=2;showError('Keine Bilddaten vom Sensor (dauerhaft Schwarzbild). Kamera neu starten oder anderes Gerät testen.');}
     }
   }else{blackFrameCount=0;}
+
+  // v3.1.4 (überarbeitet v3.2.1, Opus-Review D): Live-Belichtungs-Drift-
+  // Überwachung. Vergleicht periodisch die TATSÄCHLICHE exposureTime der
+  // Kamera mit einer UNVERÄNDERLICHEN Baseline (exposureLockBaseline, einmal
+  // beim Lock gesetzt). Die frühere Version zog die Referenz bei kleinen
+  // Abweichungen nach ("gleitende Baseline") - dadurch konnte ein Sensor,
+  // der pro Intervall knapp unterhalb der Schwelle driftet (z.B. 10% < 15%),
+  // beliebig weit davonlaufen, ohne je einen Strike zu kassieren. Jetzt:
+  // kumulativer Drift gegen den fixen Lock-Wert. hardwareSettings.exposureTime
+  // (der Wert in der Physik-Formel) wird weiterhin bei kleinen Abweichungen
+  // aktualisiert, damit die PPFD-Rechnung die echte Belichtung nutzt - aber
+  // die DRIFT-BEWERTUNG erfolgt gegen die eingefrorene Baseline.
+  if(hardwareSettings?.constraintsApplied && activeStream && (frameCount-lastExposureCheckFrame)>=EXPOSURE_CHECK_INTERVAL){
+    lastExposureCheckFrame=frameCount;
+    const track=activeStream.getVideoTracks()[0];
+    if(track){
+      const liveSettings=track.getSettings();
+      const liveExpSec=liveSettings.exposureTime?liveSettings.exposureTime*EXP_UNIT:null;
+      if(liveExpSec){
+        if(exposureLockBaseline===null) exposureLockBaseline=hardwareSettings.exposureTime>0?hardwareSettings.exposureTime:liveExpSec;
+        const drift=Math.abs(liveExpSec-exposureLockBaseline)/exposureLockBaseline;
+        if(drift>EXPOSURE_DRIFT_THRESHOLD){
+          exposureDriftStrikes++;
+          console.warn(`[PPFD] Belichtungs-Drift: Baseline ${exposureLockBaseline.toFixed(6)}s, live ${liveExpSec.toFixed(6)}s (${(drift*100).toFixed(0)}% kumulativ), Strike ${exposureDriftStrikes}/${EXPOSURE_DRIFT_STRIKES_LIMIT}`);
+          if(exposureDriftStrikes>=EXPOSURE_DRIFT_STRIKES_LIMIT){
+            revertToAutoExposure('exposure-drift');
+            showError('Belichtung driftet vom manuellen Lock ab – Sensor regelt intern nach. Auf Software-Gain umgeschaltet.');
+            exposureDriftStrikes=0;exposureLockBaseline=null;
+          }
+        }else{
+          exposureDriftStrikes=0;
+          // Physik-Formel bekommt den echten Live-Wert, Baseline bleibt fix.
+          hardwareSettings.exposureTime=liveExpSec;
+        }
+      }
+    }
+  }
 
   const rowAverages=new Float64Array(240);
   if(pixelStep===4){const samplesPerRow=320/pixelStep;for(let i=0;i<240;i++) rowAverages[i]=rowSums_lin[i]/samplesPerRow;}else{rowAverages.fill(yMean_lin);}
@@ -755,9 +901,27 @@ function processLoop(timestamp){
   currentRawPPFDUncalibrated=rawPPFD;
   if(customCalibFactor!==null) rawPPFD*=customCalibFactor;
   currentRawPPFD=rawPPFD;
-  const displayPPFD=tempStatus.isWarmedUp?kalman.update(rawPPFD):0;
-
+  // v3.2: Frame-Snapshot für Trainingsdaten-Export. Hält alle Werte fest,
+  // die beim Druck auf "Datenpunkt speichern" in die CSV wandern.
+  lastFrameSnapshot={
+    avgR_gamma:avgR_gamma,avgG_gamma:avgG_gamma,avgB_gamma:avgB_gamma,
+    avgR_lin:avgR_lin,avgG_lin:avgG_lin,avgB_lin:avgB_lin,
+    yMean_gamma:yMean_gamma,yMean_lin:yMean_lin,
+    exposureTime:hardwareSettings?.exposureTime||EXPOSURE_TIME,
+    iso:hardwareSettings?.iso||ISO,
+    gainMultiplier:gainMultiplier,
+    hardwareMode:hardwareSettings?.constraintsApplied?'manuell':'software',
+    fallbackMode:hardwareSettings?.fallbackMode||'',
+    rawPPFDUncalibrated:currentRawPPFDUncalibrated,
+    lichtquelle:currentLightSourceName,
+    clipLevel:clipStatus.level
+  };
   const isClipping=(clipStatus.level==='critical');
+  // v3.2.1 FIX (Opus-Review E): Bei kritischem Clipping ist rawPPFD
+  // gesättigter Müll. Vorher wurde er trotzdem in den Kalman gespeist -
+  // nach Rückkehr in STABLE zeigte kalman.x mehrere Frames lang einen
+  // verfälschten Wert. Jetzt: Filterzustand während Clipping einfrieren.
+  const displayPPFD=tempStatus.isWarmedUp?(isClipping?kalman.x:kalman.update(rawPPFD)):0;
   const state=appFSM.update(tempStatus.isWarmedUp,lastFlickerResult.isFlickering,isClipping,smoothedFps);
 
   document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp?(isClipping?'———':(displayPPFD<10?displayPPFD.toFixed(1):Math.round(displayPPFD))):'–––';
@@ -805,6 +969,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&isMeasurin
 window.addEventListener('beforeunload',()=>{if(isMeasuring) stopCamera();});
 document.getElementById('deviceInfo').textContent='Gerät: '+(navigator.userAgent.includes('iPhone')?'iPhone (Software-Gain erwartet)':navigator.userAgent.includes('Android')?'Android (Hardware-Lock möglich)':'Unbekannt');
 updateCameraToggleLabel();
+updateTrainCount();
 </script>
 </body>
 </html>
