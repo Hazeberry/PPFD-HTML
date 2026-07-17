@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>PPFD Meter Pro v3.2.1</title>
+<meta name="description" content="PPFD Meter Pro – Smartphone-Kamera-basierte Messung der photosynthetisch aktiven Photonenflussdichte (PAR/PPFD) für Pflanzenbeleuchtung, mit Kalibrierung und Trainingsdaten-Export.">
+<meta name="theme-color" content="#0d1f10">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%B1%3C/text%3E%3C/svg%3E">
+<title>PPFD Meter Pro v3.2.2</title>
 <style>
   :root{--bg:#0d1f10;--surface:#152118;--border:#2a3d2c;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;--blue:#60a5fa;--purple:#c084fc;--mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;--sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif}
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -73,7 +76,7 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v3.2.1</span>
+  <span class="app-title">PPFD Meter Pro v3.2.2</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
@@ -86,6 +89,7 @@
     <div class="ppfd-label">Photosynthetisch aktive Photonenflussdichte</div>
     <div class="ppfd-value" id="ppfdVal">–––</div>
     <div class="ppfd-unit">µmol · m⁻² · s⁻¹</div>
+    <div class="ppfd-unit" id="dliVal" style="margin-top:2px">DLI 12h: – · 18h: – mol·m⁻²·d⁻¹</div>
     <div class="zone-badge" id="zoneBadge" style="color:var(--muted);border-color:var(--muted)">Kamera starten</div>
   </div>
 
@@ -130,6 +134,10 @@
   <div class="params-card" id="trainCard">
     <div class="section-label">Trainingsdaten (Referenzmessung)</div>
     <div class="calib-input-group" style="margin-bottom:10px">
+      <label>Gerät (Handy-Modell)</label>
+      <input type="text" id="trainDevice" placeholder="z.B. Samsung Galaxy A17 5G">
+    </div>
+    <div class="calib-input-group" style="margin-bottom:10px">
       <label>Referenz-PPFD vom PAR-Meter (µmol·m⁻²·s⁻¹)</label>
       <input type="number" id="trainRefPPFD" placeholder="z.B. 450" step="1">
     </div>
@@ -145,7 +153,7 @@
   </div>
 
   <div class="calib-note">
-    v3.2.1 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
+    v3.2.2 · sRGB→Linear LUT · PAR-Gewichtung · Adaptiver Kalman<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung · WB-Lock · Zielband-Fallback<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
   </div>
@@ -337,6 +345,28 @@ let lastAiUpdate=0,hardwareSettings=null,useSoftwareGain=false;
 let wbManual=false;
 let customCalibFactor=null,activeStream=null,currentRawPPFD=0,currentRawPPFDUncalibrated=0,frameCount=0,animationFrameId=null;
 let blackFrameCount=0,blackFrameStage=0;
+let wakeLock=null;
+async function acquireWakeLock(){
+  // v3.2.2 FIX (Regression aus v3.1, Claude-Code-Review): Ohne Wake Lock
+  // dunkelt das Display bei längeren Messungen ab, der Lockscreen beendet
+  // die Messung dann still - besonders störend bei den neuen, längeren
+  // Trainingsdaten-Sessions mit PAR-Meter daneben.
+  try{
+    if('wakeLock' in navigator){
+      wakeLock=await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release',()=>{wakeLock=null;});
+    }
+  }catch(e){console.warn('[PPFD] Wake Lock nicht verfügbar:',e.message);}
+}
+async function releaseWakeLock(){
+  try{if(wakeLock){await wakeLock.release();wakeLock=null;}}catch(e){}
+}
+// Wake Lock wird vom System freigegeben, wenn der Tab in den Hintergrund
+// geht (visibilitychange) - bei Rückkehr während laufender Messung erneut
+// anfordern, sonst bleibt der Screen ab da ungeschützt.
+document.addEventListener('visibilitychange',async()=>{
+  if(document.visibilityState==='visible'&&isMeasuring&&!wakeLock) await acquireWakeLock();
+});
 let lastFrameSnapshot=null;
 const TRAINDATA_KEY='ppfd_traindata_v1';
 let exposureDriftStrikes=0,lastExposureCheckFrame=0,exposureLockBaseline=null;
@@ -554,13 +584,34 @@ function loadTrainData(){
 function updateTrainCount(){
   document.getElementById('trainCount').textContent=loadTrainData().length;
 }
+const TRAINDEVICE_KEY='ppfd_traindevice_v1';
+async function initTrainDevice(){
+  const el=document.getElementById('trainDevice');
+  let saved=null;
+  try{saved=localStorage.getItem(TRAINDEVICE_KEY);}catch(e){}
+  if(saved){el.value=saved;return;}
+  // Best-Effort-Vorbelegung via User-Agent Client Hints (nur Chrome/Android,
+  // erfordert explizite Anfrage). Nutzer kann/soll das Feld trotzdem prüfen
+  // und ggf. korrigieren, bevor Fremd-Datenpunkte geteilt werden - UA-Daten
+  // sind auf vielen Geräten generisch oder fehlen ganz.
+  try{
+    if(navigator.userAgentData?.getHighEntropyValues){
+      const info=await navigator.userAgentData.getHighEntropyValues(['model','platform','platformVersion']);
+      if(info.model) el.value=info.model;
+    }
+  }catch(e){}
+}
 function saveTrainPoint(){
   if(!isMeasuring||!lastFrameSnapshot){showError('Erst Messung starten – Datenpunkt braucht einen Live-Frame.');return;}
+  const device=(document.getElementById('trainDevice').value||'').trim();
+  if(!device){showError('Gerät/Handy-Modell angeben – wichtig, wenn mehrere Personen Daten beisteuern (unterschiedliche Kamerasensoren!).');return;}
   const ref=parseFloat(document.getElementById('trainRefPPFD').value);
   if(!Number.isFinite(ref)||ref<0){showError('Gültigen Referenz-PPFD vom PAR-Meter eingeben.');return;}
   if(lastFrameSnapshot.clipLevel==='critical'){showError('Frame ist übersteuert – als Trainingsdatenpunkt unbrauchbar.');return;}
+  try{localStorage.setItem(TRAINDEVICE_KEY,device);}catch(e){}
   const point={
     timestamp:new Date().toISOString(),
+    geraet:device,
     referenzPPFD:ref,
     notiz:(document.getElementById('trainNote').value||'').replace(/[,\n\r]/g,';'),
     kamera:cameraFacing,
@@ -575,7 +626,7 @@ function saveTrainPoint(){
 function exportTrainCSV(){
   const data=loadTrainData();
   if(data.length===0){showError('Keine Datenpunkte vorhanden.');return;}
-  const cols=['timestamp','referenzPPFD','notiz','kamera','avgR_gamma','avgG_gamma','avgB_gamma','avgR_lin','avgG_lin','avgB_lin','yMean_gamma','yMean_lin','exposureTime','iso','gainMultiplier','hardwareMode','fallbackMode','rawPPFDUncalibrated','lichtquelle','clipLevel'];
+  const cols=['timestamp','geraet','referenzPPFD','notiz','kamera','avgR_gamma','avgG_gamma','avgB_gamma','avgR_lin','avgG_lin','avgB_lin','yMean_gamma','yMean_lin','exposureTime','iso','gainMultiplier','hardwareMode','fallbackMode','rawPPFDUncalibrated','lichtquelle','clipLevel'];
   const rows=[cols.join(',')];
   // v3.2.1 FIX (Opus-Review, CSV-Injektion): String-Felder, die mit = + - @
   // oder Tab beginnen, würden in Excel/Sheets als Formel ausgeführt
@@ -674,6 +725,12 @@ async function startCamera(){
       document.getElementById('gainValue').textContent='1.00×';
     }
     kalman.r=hardwareSettings.constraintsApplied?2.5:8.0;
+    // v3.2.2 FIX (Regression aus v3.1->v3.1.2 Rewrite, Claude-Code-Review):
+    // Nur kalman.r wurde neu gesetzt, kalman.x/kalman.p behielten den
+    // Altzustand über Stop/Neustart und Kamerawechsel hinweg. Nach z.B.
+    // Front->Rück-Wechsel konvergierte die Anzeige sichtbar vom alten
+    // Messwert aus, statt frisch zu starten.
+    kalman.x=0.0;kalman.p=1.0;kalman.lastMeasurement=0.0;kalman.lastInnovation=0;
     tempCompensator.reset();gainController.reset();appFSM.reset();
     frameCount=0;lastFrameTime=0;smoothedFps=hardwareSettings.frameRate||30;
     pixelStep=4;stepTransitionAccum=0;
@@ -682,6 +739,7 @@ async function startCamera(){
     setButtonState('measuring');
     document.getElementById('statusDot').classList.add('active');
     isMeasuring=true;
+    await acquireWakeLock();
     animationFrameId=requestAnimationFrame(processLoop);
   }catch(err){
     // v3.2.1 FIX (Opus-Review A): Wirft irgendein await NACH erfolgreichem
@@ -701,6 +759,7 @@ async function startCamera(){
 
 function stopCamera(){
   isMeasuring=false;
+  releaseWakeLock();
   blackFrameCount=0;blackFrameStage=0;exposureDriftStrikes=0;lastExposureCheckFrame=0;exposureLockBaseline=null;
   if(animationFrameId){cancelAnimationFrame(animationFrameId);animationFrameId=null;}
   if(activeStream){activeStream.getTracks().forEach(t=>t.stop());activeStream=null;}
@@ -713,7 +772,16 @@ function stopCamera(){
   document.getElementById('gainControl').classList.remove('visible');
   ['hardwareRow','clippingRow','reliabilityRow','fpsRow','stepRow','debugExpRow'].forEach(id=>document.getElementById(id).style.display='none');
   document.getElementById('flickerWarning').style.display='none';
+  // v3.2.2 FIX (Regression aus v3.1, Claude-Code-Review): Lichtquelle/
+  // Spektral-Faktor/Flicker-Status blieben nach "Messung stoppen" auf dem
+  // letzten Live-Wert stehen (z.B. "LED Grow"), obwohl keine Messung mehr
+  // lief - irreführend beim nächsten Blick auf die UI.
+  document.getElementById('lightSourceVal').textContent='Unbekannt';
+  document.getElementById('spectralFactorVal').textContent='×1.00';
+  document.getElementById('flickerVal').textContent='OK';
+  document.getElementById('flickerVal').style.color='';
   document.getElementById('ppfdVal').textContent='–––';
+  document.getElementById('dliVal').textContent='DLI 12h: – · 18h: – mol·m⁻²·d⁻¹';
   document.getElementById('luxVal').textContent='–';
   document.getElementById('yMeanVal').textContent='–';
   document.getElementById('confVal').textContent='–';
@@ -925,6 +993,16 @@ function processLoop(timestamp){
   const state=appFSM.update(tempStatus.isWarmedUp,lastFlickerResult.isFlickering,isClipping,smoothedFps);
 
   document.getElementById('ppfdVal').textContent=tempStatus.isWarmedUp?(isClipping?'———':(displayPPFD<10?displayPPFD.toFixed(1):Math.round(displayPPFD))):'–––';
+  // v3.2.2 FIX (Regression aus v3.1, Claude-Code-Review): DLI (Daily Light
+  // Integral) war komplett entfernt worden. DLI = PPFD × Belichtungsstunden
+  // × 3600s/h ÷ 1e6 µmol/mol.
+  if(tempStatus.isWarmedUp&&!isClipping){
+    const dli12=(displayPPFD*12*3600/1e6).toFixed(1);
+    const dli18=(displayPPFD*18*3600/1e6).toFixed(1);
+    document.getElementById('dliVal').textContent=`DLI 12h: ${dli12} · 18h: ${dli18} mol·m⁻²·d⁻¹`;
+  }else{
+    document.getElementById('dliVal').textContent='DLI 12h: – · 18h: – mol·m⁻²·d⁻¹';
+  }
   document.getElementById('luxVal').textContent=Math.round(lux);
   document.getElementById('yMeanVal').textContent=yMean_gamma.toFixed(1);
 
@@ -970,6 +1048,7 @@ window.addEventListener('beforeunload',()=>{if(isMeasuring) stopCamera();});
 document.getElementById('deviceInfo').textContent='Gerät: '+(navigator.userAgent.includes('iPhone')?'iPhone (Software-Gain erwartet)':navigator.userAgent.includes('Android')?'Android (Hardware-Lock möglich)':'Unbekannt');
 updateCameraToggleLabel();
 updateTrainCount();
+initTrainDevice();
 </script>
 </body>
 </html>
