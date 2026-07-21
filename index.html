@@ -6,7 +6,7 @@
 <meta name="description" content="PPFD Meter Pro – Smartphone-Kamera-basierte Messung der photosynthetisch aktiven Photonenflussdichte (PAR/PPFD) für Pflanzenbeleuchtung, mit Kalibrierung und Trainingsdaten-Export.">
 <meta name="theme-color" content="#0d1f10">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%B1%3C/text%3E%3C/svg%3E">
-<title>PPFD Meter Pro v3.3.0</title>
+<title>PPFD Meter Pro v3.3.4</title>
 <style>
   :root{--bg:#0d1f10;--surface:#152118;--border:#2a3d2c;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--text:#e8f5ea;--muted:#6b8f6e;--card-bg:#1a2f1e;--blue:#60a5fa;--purple:#c084fc;--mono:ui-monospace,'Roboto Mono','Cascadia Mono',Menlo,Consolas,monospace;--sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif}
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -79,7 +79,7 @@
 </head>
 <body>
 <header>
-  <span class="app-title">PPFD Meter Pro v3.3.0</span>
+  <span class="app-title">PPFD Meter Pro v3.3.4</span>
   <div class="status-dot" id="statusDot"></div>
 </header>
 <main>
@@ -108,6 +108,8 @@
     <div class="param-row" id="clippingRow" style="display:none"><span class="param-name">Clipping</span><span class="param-val" id="clippingVal" style="color:var(--green)">OK</span></div>
     <div class="param-row" id="signalRow" style="display:none"><span class="param-name">Signal</span><span class="param-val" id="signalVal" style="color:var(--green)">OK</span></div>
     <div class="param-row" id="reliabilityRow" style="display:none"><span class="param-name">Messzuverlässigkeit</span><span class="param-val" id="reliabilityVal">100%</span></div>
+    <!-- v3.3.4 (Stage 2): relatives Unsicherheitsbudget (GUM-artig, konservativ) -->
+    <div class="param-row" id="uncertaintyRow" style="display:none"><span class="param-name">Unsicherheit</span><span class="param-val" id="uncertaintyVal">–</span></div>
   </div>
 
   <button id="cameraToggle" onclick="toggleCamera()" style="width:100%;padding:10px;margin-bottom:10px;background:transparent;border:1px solid var(--muted);border-radius:10px;color:var(--text);font-family:var(--mono);font-size:12px;letter-spacing:.06em;cursor:pointer">📷 Front (Diffusor)</button>
@@ -167,7 +169,7 @@
   </div>
 
   <div class="calib-note">
-    v3.3.0 · Exakte sRGB-EOTF (IEC 61966-2-1) · PAR-Gewichtung · Adaptiver Kalman<br>
+    v3.3.4 · Exakte sRGB-EOTF (IEC 61966-2-1) · PAR-Gewichtung · Adaptiver Kalman · Q-Index · ±Unsicherheit<br>
     Rolling-Shutter Flicker · Adaptives Subsampling · FSM Hysterese · Persistente Kalibrierung (v2) · WB-Lock · Zielband-Fallback · EV-Anti-Clipping<br>
     Live-Exposure (SW-Modus) · Flicker-Periodizität · Start-Race-Guard · Clipping-Priorität · Kalibrier-Guards · Signal-Flag · Manuelle Lichtprofile · Reine Pipeline-Funktionen<br>
     <span id="deviceInfo">Gerät: wird erkannt...</span>
@@ -260,6 +262,10 @@ function analyzeFrame(data,width,height,pixelStep,lut){
   let sumR_gamma=0,sumG_gamma=0,sumB_gamma=0,sumY_gamma=0;
   let clippingPixels=0,sampledPixels=0;
   const rowSums_lin=new Float64Array(height);
+  // v3.3.1 (Stage 2): 3x3-Zonenraster für die räumliche Uniformität. Ein
+  // Hotspot (Lampe punktuell auf dem Diffusor) oder starke Vignette machen
+  // den Frame-Mittelwert unrepräsentativ für die Kosinus-gewichtete Ebene.
+  const zoneSums=new Float64Array(9),zoneCounts=new Float64Array(9);
   const len=data.length;
   const stride=4*pixelStep;
   for(let i=0;i<len;i+=stride){
@@ -271,7 +277,10 @@ function analyzeFrame(data,width,height,pixelStep,lut){
     sumY_lin+=yLin;
     sumR_gamma+=rg;sumG_gamma+=gg;sumB_gamma+=bg;
     sumY_gamma+=0.299*rg+0.587*gg+0.114*bg;
-    if(pixelStep===4){const row=((i>>2)/width)|0;rowSums_lin[row]+=yLin;}
+    const px=(i>>2)%width,py=((i>>2)/width)|0;
+    if(pixelStep===4) rowSums_lin[py]+=yLin;
+    const zi=Math.min(2,(py*3/height)|0)*3+Math.min(2,(px*3/width)|0);
+    zoneSums[zi]+=yLin;zoneCounts[zi]++;
     sampledPixels++;
   }
   const avgR_lin=sumR_lin/sampledPixels,avgG_lin=sumG_lin/sampledPixels,avgB_lin=sumB_lin/sampledPixels;
@@ -280,7 +289,19 @@ function analyzeFrame(data,width,height,pixelStep,lut){
   const yMean_gamma=sumY_gamma/sampledPixels;
   const rowAverages=new Float64Array(height);
   if(pixelStep===4){const samplesPerRow=width/pixelStep;for(let r=0;r<height;r++) rowAverages[r]=rowSums_lin[r]/samplesPerRow;}else{rowAverages.fill(yMean_lin);}
-  return{avgR_lin,avgG_lin,avgB_lin,yMean_lin,avgR_gamma,avgG_gamma,avgB_gamma,yMean_gamma,clippingPixels,sampledPixels,rowAverages};
+  // v3.3.1: CV der Zonenmittel (Populations-Std/Mittel). In der Rauschdomäne
+  // (unter SIGNAL_CRIT_LIN) wäre der CV nur Rauschstatistik -> bewusst null,
+  // damit Stage 2 ihn neutral behandelt statt Q doppelt zu bestrafen.
+  const zoneMeans=new Array(9);
+  for(let z=0;z<9;z++) zoneMeans[z]=zoneCounts[z]>0?zoneSums[z]/zoneCounts[z]:0;
+  const zoneMu=zoneMeans.reduce((a,b)=>a+b,0)/9;
+  let uniformityCV=null;
+  if(yMean_lin>=SIGNAL_CRIT_LIN&&zoneMu>0){
+    const zoneVar=zoneMeans.reduce((s,v)=>s+(v-zoneMu)**2,0)/9;
+    uniformityCV=Math.sqrt(zoneVar)/zoneMu;
+  }
+  const uniformity={cv:uniformityCV,mean:zoneMu,zoneMeans};
+  return{avgR_lin,avgG_lin,avgB_lin,yMean_lin,avgR_gamma,avgG_gamma,avgB_gamma,yMean_gamma,clippingPixels,sampledPixels,rowAverages,uniformity};
 }
 
 class AdaptivePPFDKalmanFilter {
@@ -422,6 +443,74 @@ function calculatePARFromLinear(r,g,b,id){
   if(id==='SODIUM_HPS') return r*0.55+g*0.40+b*0.05;
   return r*0.33+g*0.34+b*0.33;
 }
+
+// ── v3.3.2 (Stage 2): Qualitätsindex Q ──────────────────────────────────
+// Weiche Rampe 1→0 auf Smoothstep-Basis: 1 bei x<=x0, 0 bei x>=x1, dazwischen
+// stetig differenzierbar (keine harten Sprünge in der Anzeige). x1<x0 kehrt
+// die Rampe um ("mehr ist besser", z.B. Signalpegel).
+function ramp01(x,x0,x1){
+  if(x0===x1) return x<=x0?1:0;
+  const t=(x-x0)/(x1-x0);
+  if(t<=0) return 1;
+  if(t>=1) return 0;
+  return 1-t*t*(3-2*t);
+}
+
+// Zeitlicher Variationskoeffizient über einen Ringpuffer (yMean_lin der
+// letzten Frames). Unter 5 Samples keine Aussage -> null (neutral).
+class TemporalStats {
+  constructor(n=30){this.n=n;this.buf=[];}
+  push(v){this.buf.push(v);if(this.buf.length>this.n)this.buf.shift();}
+  cv(){
+    if(this.buf.length<5) return null;
+    const m=this.buf.reduce((a,b)=>a+b,0)/this.buf.length;
+    if(m===0) return null;
+    const va=this.buf.reduce((s,v)=>s+(v-m)**2,0)/this.buf.length;
+    return Math.sqrt(va)/m;
+  }
+  reset(){this.buf=[];}
+}
+
+// Q = Produkt vier normierter Komponenten in [0,1]. Produkt statt Minimum:
+// mehrere mittlere Probleme drücken Q stärker als ein einzelnes - entspricht
+// der realen Verlässlichkeit. null-Komponenten (keine Aussage möglich) gehen
+// neutral mit 1 ein statt doppelt zu bestrafen.
+const Q_CLIP_FULL=0.01,Q_CLIP_ZERO=0.15;   // Clipping-Anteil (0.15 = 'critical'-Schwelle)
+const Q_UNI_FULL=0.05,Q_UNI_ZERO=0.50;     // räumlicher CV der 3x3-Zonen
+const Q_STAB_FULL=0.01,Q_STAB_ZERO=0.25;   // zeitlicher CV
+const SIGNAL_FULL_LIN=0.04;                // ab hier volles Signal-Q (invertierte Rampe bis SIGNAL_CRIT_LIN)
+function computeQuality({clipRatio,uniformityCV,yMeanLin,temporalCV}){
+  const qClip=ramp01(clipRatio,Q_CLIP_FULL,Q_CLIP_ZERO);
+  const qUniformity=uniformityCV==null?1:ramp01(uniformityCV,Q_UNI_FULL,Q_UNI_ZERO);
+  const qSignal=ramp01(yMeanLin,SIGNAL_FULL_LIN,SIGNAL_CRIT_LIN);
+  const qStability=temporalCV==null?1:ramp01(temporalCV,Q_STAB_FULL,Q_STAB_ZERO);
+  const q=qClip*qUniformity*qSignal*qStability;
+  const comps={clip:qClip,uniformity:qUniformity,signal:qSignal,stability:qStability};
+  let weakest='clip';
+  for(const k of Object.keys(comps)) if(comps[k]<comps[weakest]) weakest=k;
+  return{q,qClip,qUniformity,qSignal,qStability,weakest};
+}
+
+// ── v3.3.3 (Stage 2): Unsicherheitsbudget (GUM-artig, relativ) ──────────
+// Systematisch (uSys): Kalibrierstatus + Lichtquellen-Profil. Zufällig
+// (uRand): Shot-Noise-Modell k/sqrt(Y_lin) mit Floor/Cap + zeitlicher CV.
+// Kombination in Quadratur. Die Zahlen sind bewusst konservative Schätzer,
+// keine metrologische Rückführung - siehe README-Einordnung.
+const U_CAL_CALIBRATED=0.05,U_CAL_UNCALIBRATED=0.35;
+const U_AUTO_CLASS_MIN=0.10; // Auto-Klassifikation kann das Profil verfehlen
+const U_NOISE_FLOOR=0.005,U_NOISE_K=0.005,U_NOISE_MAX=0.20;
+function computeUncertainty({calibrated,profileU,autoMode,temporalCV,yMeanLin}){
+  let uNoise;
+  if(!(yMeanLin>0)) uNoise=U_NOISE_MAX;
+  else uNoise=Math.min(U_NOISE_MAX,Math.max(U_NOISE_FLOOR,U_NOISE_K/Math.sqrt(yMeanLin)));
+  const uCal=calibrated?U_CAL_CALIBRATED:U_CAL_UNCALIBRATED;
+  const uProfile=autoMode?Math.max(profileU,U_AUTO_CLASS_MIN):profileU;
+  const uTemporal=temporalCV==null?0:temporalCV;
+  const uSys=Math.sqrt(uCal*uCal+uProfile*uProfile);
+  const uRand=Math.sqrt(uNoise*uNoise+uTemporal*uTemporal);
+  const uRel=Math.sqrt(uSys*uSys+uRand*uRand);
+  return{uNoise,uCal,uProfile,uTemporal,uSys,uRand,uRel};
+}
 /* ===PURE-PIPELINE-END=== */
 
 // DOM-gebunden (Anzeige von Y-Current/Trend) - daher außerhalb des
@@ -457,6 +546,7 @@ const flickerDetector=new SpatialFlickerDetector(0.95);
 const gainController=new SoftwareGainController();
 const clippingDetector=new ClippingDetector();
 const tempCompensator=new TemperatureCompensator();
+const temporalStats=new TemporalStats(30); // v3.3.4: zeitlicher CV über ~1s
 const appFSM=new AppStatusStateMachine();
 
 let isMeasuring=false,currentFactor=0.0185,currentLightSourceName='SUNLIGHT';
@@ -527,6 +617,8 @@ let flickerReliable=true,lowFpsFrameCount=0;
 const FPS_THRESHOLD_LOW=15,FPS_THRESHOLD_HIGH=20,FPS_CONFIRM_FRAMES=10;
 let lastFlickerResult={isFlickering:false,modulation:"0.0",freq:"N/A"};
 let currentSignalLevel='ok'; // v3.3.0 (B): letztes Unterbelichtungs-Flag (classifySignal)
+// v3.3.4 (Stage 2): letzte Q-/Unsicherheits-Bewertung (für Snapshot/CSV)
+let currentQuality=null,currentUncertainty=null,currentTemporalCV=null;
 // v3.3.0 (F): Manuelles Lichtquellen-Profil. 'AUTO' = Heuristik. Global
 // persistiert (die Lampe gehört nicht zur Kamera, daher NICHT pro facing).
 const LIGHTSRC_KEY='ppfd_lightsrc_v1';
@@ -817,7 +909,7 @@ function saveTrainPoint(){
 function exportTrainCSV(){
   const data=loadTrainData();
   if(data.length===0){showError('Keine Datenpunkte vorhanden.');return;}
-  const cols=['timestamp','geraet','referenzPPFD','notiz','kamera','avgR_gamma','avgG_gamma','avgB_gamma','avgR_lin','avgG_lin','avgB_lin','yMean_gamma','yMean_lin','exposureTime','iso','gainMultiplier','hardwareMode','fallbackMode','rawPPFDUncalibrated','lichtquelle','clipLevel','linearization','signalLevel','lichtquelleModus','profilFaktor','profilUnsicherheit'];
+  const cols=['timestamp','geraet','referenzPPFD','notiz','kamera','avgR_gamma','avgG_gamma','avgB_gamma','avgR_lin','avgG_lin','avgB_lin','yMean_gamma','yMean_lin','exposureTime','iso','gainMultiplier','hardwareMode','fallbackMode','rawPPFDUncalibrated','lichtquelle','clipLevel','linearization','signalLevel','lichtquelleModus','profilFaktor','profilUnsicherheit','qualitaetQ','qSchwaechste','uniformitaetCV','zeitlicherCV','unsicherheitRel'];
   const rows=[cols.join(',')];
   // v3.2.1 FIX (Opus-Review, CSV-Injektion): String-Felder, die mit = + - @
   // oder Tab beginnen, würden in Excel/Sheets als Formel ausgeführt
@@ -908,6 +1000,7 @@ async function startCamera(){
     document.getElementById('hardwareVal').textContent=mode+modeSuffix;
     document.getElementById('clippingRow').style.display='flex';
     document.getElementById('signalRow').style.display='flex';
+    document.getElementById('uncertaintyRow').style.display='flex'; // v3.3.4
     document.getElementById('reliabilityRow').style.display='flex';
     document.getElementById('fpsRow').style.display='flex';
     document.getElementById('stepRow').style.display='flex';
@@ -927,6 +1020,7 @@ async function startCamera(){
     // Messwert aus, statt frisch zu starten.
     kalman.x=0.0;kalman.p=1.0;kalman.lastMeasurement=0.0;kalman.lastInnovation=0;
     tempCompensator.reset();gainController.reset();appFSM.reset();
+    temporalStats.reset();currentQuality=null;currentUncertainty=null;currentTemporalCV=null; // v3.3.4
     frameCount=0;lastFrameTime=0;smoothedFps=hardwareSettings.frameRate||30;
     pixelStep=4;stepTransitionAccum=0;
     lastFlickerResult={isFlickering:false,modulation:"0.0",freq:"N/A"};
@@ -967,7 +1061,12 @@ function stopCamera(){
   document.getElementById('statusDot').className='status-dot';
   document.getElementById('warmupOverlay').classList.remove('active');
   document.getElementById('gainControl').classList.remove('visible');
-  ['hardwareRow','clippingRow','signalRow','reliabilityRow','fpsRow','stepRow','debugExpRow'].forEach(id=>document.getElementById(id).style.display='none');
+  ['hardwareRow','clippingRow','signalRow','reliabilityRow','uncertaintyRow','fpsRow','stepRow','debugExpRow'].forEach(id=>document.getElementById(id).style.display='none');
+  temporalStats.reset();currentQuality=null;currentUncertainty=null;currentTemporalCV=null; // v3.3.4
+  document.getElementById('reliabilityVal').textContent='100%';
+  document.getElementById('reliabilityVal').style.color='';
+  document.getElementById('uncertaintyVal').textContent='–';
+  document.getElementById('uncertaintyVal').style.color='';
   document.getElementById('flickerWarning').style.display='none';
   // v3.2.2 FIX (Regression aus v3.1, Claude-Code-Review): Lichtquelle/
   // Spektral-Faktor/Flicker-Status blieben nach "Messung stoppen" auf dem
@@ -1053,6 +1152,7 @@ async function revertToAutoExposure(reason){
   document.getElementById('hardwareVal').textContent='Auto (Fallback: '+(reason||'auto-revert')+')';
   kalman.r=8.0;
   tempCompensator.reset();
+  temporalStats.reset(); // v3.3.4: Belichtungssprung würde falsche Instabilität melden
   wbManual=false;
   lightDetector.unlock();
 }
@@ -1174,8 +1274,31 @@ function processLoop(timestamp){
   const clipStatus=clippingDetector.analyze(clippingPixels,sampledPixels);
   document.getElementById('clippingVal').textContent=clipStatus.message;
   document.getElementById('clippingVal').style.color=clipStatus.color;
-  document.getElementById('reliabilityVal').textContent=(clipStatus.reliability*100).toFixed(0)+'%';
-  document.getElementById('reliabilityVal').style.color=clipStatus.color;
+
+  // v3.3.4 (Stage 2): Messzuverlässigkeit = Qualitätsindex Q (Produkt aus
+  // Clipping, 3x3-Uniformität, Signalpegel, zeitlicher Stabilität) statt der
+  // bisherigen rein Clipping-basierten Stufen. Bei Q<80% wird die schwächste
+  // Komponente benannt, damit klar ist, WAS die Messung gerade limitiert.
+  temporalStats.push(yMean_lin);
+  currentTemporalCV=temporalStats.cv();
+  const quality=computeQuality({clipRatio:clippingPixels/sampledPixels,uniformityCV:frame.uniformity.cv,yMeanLin:yMean_lin,temporalCV:currentTemporalCV});
+  currentQuality=quality;
+  const WEAKEST_LABEL={clip:'Clipping',uniformity:'Uniformität',signal:'Signal',stability:'Stabilität'};
+  document.getElementById('reliabilityVal').textContent=Math.round(quality.q*100)+'%'+(quality.q<0.8?' · '+WEAKEST_LABEL[quality.weakest]:'');
+  document.getElementById('reliabilityVal').style.color=quality.q>=0.8?'var(--green)':quality.q>=0.4?'var(--amber)':'var(--red)';
+
+  // v3.3.4 (Stage 2): relatives Unsicherheitsbudget. uSys dominiert ohne
+  // Kalibrierung (±35%) - die Anzeige macht sichtbar, dass Kalibrieren der
+  // größte einzelne Genauigkeitshebel ist.
+  currentUncertainty=computeUncertainty({
+    calibrated:customCalibFactor!==null,
+    profileU:LIGHT_PROFILES[currentLightSourceName]?.u??U_AUTO_CLASS_MIN,
+    autoMode:manualLightKey==='AUTO',
+    temporalCV:currentTemporalCV,
+    yMeanLin:yMean_lin
+  });
+  document.getElementById('uncertaintyVal').textContent='±'+(currentUncertainty.uRel*100).toFixed(0)+'%'+(customCalibFactor===null?' · unkalibriert':'');
+  document.getElementById('uncertaintyVal').style.color=currentUncertainty.uRel<=0.10?'var(--green)':currentUncertainty.uRel<=0.20?'var(--amber)':'var(--muted)';
 
   // v3.2.3: Zweistufige Eskalation bei DAUERHAFTEM kritischen Clipping.
   // Stufe 1 (nur Software-Modus): negative EV anfordern. Stufe 2: konkreter
@@ -1274,7 +1397,14 @@ function processLoop(timestamp){
     signalLevel:signalStatus.level,
     lichtquelleModus:manualLightKey!=='AUTO'?'manuell':'auto',
     profilFaktor:currentFactor,
-    profilUnsicherheit:(LIGHT_PROFILES[currentLightSourceName]?.u ?? null)
+    profilUnsicherheit:(LIGHT_PROFILES[currentLightSourceName]?.u ?? null),
+    // v3.3.4 (Stage 2): Q-/Unsicherheits-Kontext des Frames - erlaubt es,
+    // Trainingsdatenpunkte nach Messqualität zu filtern/gewichten.
+    qualitaetQ:(currentQuality?currentQuality.q:null),
+    qSchwaechste:(currentQuality?currentQuality.weakest:''),
+    uniformitaetCV:frame.uniformity.cv,
+    zeitlicherCV:currentTemporalCV,
+    unsicherheitRel:(currentUncertainty?currentUncertainty.uRel:null)
   };
   const isClipping=(clipStatus.level==='critical');
   // v3.2.1 FIX (Opus-Review E): Bei kritischem Clipping ist rawPPFD
