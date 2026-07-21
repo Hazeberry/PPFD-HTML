@@ -155,7 +155,7 @@
    startBtnEl.disabled=true;startBtnEl.textContent='Starte...';
    try{
 @@ -714,6 +759,7 @@
-       video.addEventListener('loadeddata',()=>{clearTimeout(t);res();},{once:true})
+       video.addEventListener('loadeddata',()=>{clearTimeout(t);res();},{once:true});
      });
      blackFrameStage=0;blackFrameCount=0;exposureDriftStrikes=0;lastExposureCheckFrame=0;exposureLockBaseline=null;
 +    lastSwPollFrame=0; // v3.2.4
@@ -207,3 +207,4 @@
 +
    const rowAverages=new Float64Array(240);
    if(pixelStep===4){const samplesPerRow=320/pixelStep;for(let i=0;i<240;i++) rowAverages[i]=rowSums_lin[i]/samplesPerRow;}else{rowAverages.fill(yMean_lin);}
+ 
